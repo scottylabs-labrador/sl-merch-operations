@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ org }} merch admin</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#f6f6f7;margin:0;color:#111}
+  header{background:#333;color:#fff;padding:12px 16px;display:flex;justify-content:space-between}
+  header a{color:#fff}
+  main{max-width:1100px;margin:0 auto;padding:16px}
+  .card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 2px 10px rgba(0,0,0,.06);margin-bottom:16px;overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:14px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #eee;vertical-align:top}
+  .status{font-weight:700;padding:2px 8px;border-radius:6px;font-size:12px}
+  .pending{background:#fff3cd;color:#7a5a00}.needs_email{background:#e3ecfa;color:#1d3f7a}.picked_up{background:#d9f2e3;color:#155a2e}.needs_review{background:#ffe0e0;color:#7a0b1c}.cancelled{background:#eee;color:#555}
+  .purchase{color:#155a2e}.refund{color:#7a5a00}.buyer_reply{color:#0b4a7a}.ignored{color:#777}.error{color:#7a0b1c}
+  form.inline{display:inline}
+  input,select{padding:6px;border:1px solid #ccc;border-radius:6px}
+  button{padding:6px 10px;border:0;border-radius:6px;background:#b8102b;color:#fff}
+  button.grey{background:#ddd;color:#111}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+  code{font-family:Menlo,Consolas,monospace}
+  .flash{background:#e8f0fe;padding:10px;border-radius:8px;margin-bottom:12px}
+</style>
+</head>
+<body>
+<header><strong>{{ org }} merch admin</strong><span><a href="/pickup">pickup page</a> · <a href="/admin/orders.csv">export CSV</a> · <a href="/logout">sign out</a></span></header>
+<main>
+  {% if request.query_params.get('flash') %}<div class="flash">{{ request.query_params.get('flash') }}</div>{% endif %}
+
+  <div class="grid">
+    <div class="card">
+      <h3>Bring to the next GBM</h3>
+      {% if bring %}
+      <table><tr><th>Size</th><th>Unpicked</th><th>Orders</th></tr>
+      {% for size, qty, n in bring %}<tr><td>{{ size or '–' }}</td><td>{{ qty }}</td><td>{{ n }}</td></tr>{% endfor %}
+      </table>
+      {% else %}<p>Nothing pending.</p>{% endif %}
+      <p><small>{{ pending }} pending orders.</small></p>
+      <form method="post" action="/admin/bring-list"><button class="grey">Email bring list to org now</button></form>
+      <form method="post" action="/admin/poll" style="margin-top:6px"><button class="grey">Poll inbox now</button></form>
+    </div>
+
+    <div class="card">
+      <h3>Awaiting buyer email ({{ awaiting|length }})</h3>
+      <p><small>TartanConnect's officer notification has the buyer's name but not their email. Fill it in here (Store → Sales shows it), upload the Sales report below, or wait for the buyer to forward their receipt.</small></p>
+      {% for o in awaiting %}
+      <form method="post" action="/admin/orders/{{ o.id }}/email" style="margin:6px 0">
+        <code>{{ o.pickup_code }}</code> {{ o.buyer_name }} · {{ o.summary() }}<br>
+        <input name="email" type="email" placeholder="buyer@andrew.cmu.edu" required> <button>Save & send code</button>
+      </form>
+      {% else %}<p>None.</p>{% endfor %}
+    </div>
+
+    <div class="card">
+      <h3>Reconcile with TartanConnect</h3>
+      <p><small>Store → Sales → Generate Report, then upload the CSV. Any purchase the service never saw gets an order and a code email.</small></p>
+      <form method="post" action="/admin/reconcile" enctype="multipart/form-data">
+        <input type="file" name="file" accept=".csv,text/csv" required>
+        <label><input type="checkbox" name="send_email" value="yes" checked> email codes to new buyers</label>
+        <button>Upload</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>Manual order</h3>
+      <form method="post" action="/admin/orders/manual">
+        <input name="buyer_name" placeholder="Buyer name" required>
+        <input name="buyer_email" placeholder="buyer@andrew.cmu.edu" type="email" required>
+        <select name="size">{% for s in ['XS','S','M','L','XL','XXL'] %}<option>{{ s }}</option>{% endfor %}</select>
+        <input name="quantity" type="number" value="1" min="1" style="width:60px">
+        <label><input type="checkbox" name="send_email" value="yes" checked> email code</label>
+        <button>Create</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Orders ({{ orders|length }})</h3>
+    <table>
+      <tr><th>#</th><th>Code</th><th>Status</th><th>Buyer</th><th>Items</th><th>Picked</th><th>Ordered</th><th>Code email</th><th>Source</th><th>Actions</th></tr>
+      {% for o in orders %}
+      <tr>
+        <td>{{ o.id }}</td>
+        <td><code>{{ o.pickup_code }}</code></td>
+        <td><span class="status {{ o.status }}">{{ o.status.replace('_',' ') }}</span></td>
+        <td>{{ o.buyer_name }}<br><small>{{ o.buyer_email }}</small></td>
+        <td>{{ o.summary() }}</td>
+        <td>{{ o.quantity_picked }}/{{ o.quantity_total }}{% if o.pickups %}<br><small>{{ o.pickups[-1].picked_up_at.strftime('%b %d %H:%M') }} · {{ o.pickups[-1].volunteer }}</small>{% endif %}</td>
+        <td>{{ o.purchased_at.strftime('%b %d %H:%M') if o.purchased_at else '' }}</td>
+        <td>{% if o.code_email_sent_at %}sent {{ o.code_email_sent_at.strftime('%b %d %H:%M') }}{% elif o.code_email_error %}<span class="error">failed</span>{% else %}–{% endif %}</td>
+        <td>{{ o.parse_source }}{% if o.notes %}<br><small>{{ o.notes }}</small>{% endif %}</td>
+        <td>
+          <form class="inline" method="post" action="/admin/orders/{{ o.id }}/resend"><button class="grey">Resend code</button></form>
+          <form class="inline" method="post" action="/admin/orders/{{ o.id }}/status">
+            <select name="status">{% for s in ['pending','needs_email','picked_up','needs_review','cancelled'] %}<option value="{{ s }}" {% if s == o.status %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+            <button class="grey">Set</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>Recent inbound email ({{ inbox }})</h3>
+    <table>
+      <tr><th>Received</th><th>From</th><th>Subject</th><th>Classified</th><th>Detail</th><th></th></tr>
+      {% for e in recent %}
+      <tr><td>{{ e.received_at.strftime('%b %d %H:%M') }}</td><td>{{ e.from_addr }}</td><td>{{ e.subject }}</td><td class="{{ e.classification }}">{{ e.classification }}</td><td><small>{{ e.detail or '' }}</small></td><td><form class="inline" method="post" action="/admin/inbound/{{ e.id }}/reprocess"><button class="grey">Reprocess</button></form></td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</main>
+</body>
+</html>

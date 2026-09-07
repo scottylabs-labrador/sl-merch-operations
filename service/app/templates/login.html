@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Merch pickup · sign in</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#f6f6f7;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}
+  form{background:#fff;padding:28px;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.08);width:min(92vw,360px)}
+  h1{font-size:20px;margin:0 0 14px}
+  input{width:100%;box-sizing:border-box;font-size:18px;padding:12px;border:1px solid #ccc;border-radius:10px}
+  button{margin-top:14px;width:100%;font-size:18px;padding:12px;border:0;border-radius:10px;background:#b8102b;color:#fff}
+  .err{color:#b8102b;margin:8px 0 0}
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>ScottyLabs merch pickup</h1>
+  <input type="hidden" name="next" value="{{ next }}">
+  <input name="passcode" type="password" placeholder="Passcode" autofocus autocomplete="current-password">
+  {% if error %}<p class="err">Wrong passcode.</p>{% endif %}
+  <button type="submit">Sign in</button>
+</form>
+</body>
+</html>

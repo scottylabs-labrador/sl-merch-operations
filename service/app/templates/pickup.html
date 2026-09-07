@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ org }} merch pickup</title>
+<style>
+  :root{--red:#b8102b;--green:#1d7a3f;--ink:#111;--muted:#666;--bg:#f6f6f7}
+  body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:var(--bg);margin:0;color:var(--ink)}
+  header{background:var(--red);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
+  header a{color:#fff;opacity:.85;font-size:14px}
+  main{max-width:560px;margin:0 auto;padding:16px}
+  .card{background:#fff;border-radius:14px;padding:18px;box-shadow:0 2px 10px rgba(0,0,0,.06);margin-bottom:16px}
+  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+  input{width:100%;box-sizing:border-box;font-size:22px;padding:12px;border:1px solid #ccc;border-radius:10px;text-transform:uppercase;letter-spacing:2px;font-family:Menlo,Consolas,monospace}
+  input.plain{text-transform:none;letter-spacing:0;font-family:inherit;font-size:17px}
+  button{font-size:18px;padding:12px 16px;border:0;border-radius:10px;background:var(--red);color:#fff;width:100%;margin-top:10px}
+  button.secondary{background:#eee;color:var(--ink)}
+  button.green{background:var(--green)}
+  .status{font-weight:700;padding:6px 10px;border-radius:8px;display:inline-block}
+  .pending{background:#fff3cd;color:#7a5a00}.needs_email{background:#e3ecfa;color:#1d3f7a}.picked_up{background:#d9f2e3;color:#155a2e}.needs_review{background:#ffe0e0;color:#7a0b1c}.cancelled{background:#eee;color:#555}
+  .items li{font-size:18px;margin:4px 0}
+  .msg{padding:12px;border-radius:10px;margin-top:10px}
+  .ok{background:#d9f2e3;color:#155a2e}.bad{background:#ffe0e0;color:#7a0b1c}
+  #reader{width:100%;border-radius:10px;overflow:hidden}
+  .row{display:flex;gap:8px}.row>*{flex:1}
+  small{color:var(--muted)}
+</style>
+</head>
+<body>
+<header><strong>{{ org }} merch pickup</strong><span>{{ role }} · <a href="/logout">sign out</a>{% if role == 'admin' %} · <a href="/admin">admin</a>{% endif %}</span></header>
+<main>
+  <div class="card">
+    <label for="code">Pickup code (or scan the QR)</label>
+    <input id="code" placeholder="SL-XXXX-XXXX" autocomplete="off" inputmode="latin" autofocus>
+    <div class="row">
+      <button id="lookup">Look up</button>
+      <button id="scan" class="secondary">Scan QR</button>
+    </div>
+    <div id="reader" hidden></div>
+    <label for="q">No code? Search by name or email</label>
+    <input id="q" class="plain" placeholder="andrew id, email, or name">
+    <button id="search" class="secondary">Search</button>
+    <div id="lookupMsg"></div>
+  </div>
+
+  <div id="result" class="card" hidden>
+    <div><span id="status" class="status"></span> <small id="when"></small></div>
+    <h2 id="buyer" style="margin:10px 0 2px"></h2>
+    <small id="email"></small>
+    <ul class="items" id="items"></ul>
+    <div id="history"></div>
+    <div id="confirmBox">
+      <label for="volunteer">Your name (volunteer)</label>
+      <input id="volunteer" class="plain" placeholder="who is handing this over">
+      <label for="presented">Who is picking up? (leave blank if it's the buyer)</label>
+      <input id="presented" class="plain" placeholder="delegate's name, optional">
+      <button id="confirm" class="green">Confirm handed over</button>
+    </div>
+    <div id="confirmMsg"></div>
+  </div>
+  <div id="multi" class="card" hidden><h3>Matches</h3><div id="multiList"></div></div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+let current = null;
+try { $('volunteer').value = localStorage.getItem('merch_volunteer') || ''; } catch (e) {}
+
+function show(order){
+  current = order;
+  $('multi').hidden = true; $('result').hidden = false;
+  $('status').textContent = order.status.replace('_',' ');
+  $('status').className = 'status ' + order.status;
+  $('when').textContent = order.purchased_at ? 'ordered ' + new Date(order.purchased_at).toLocaleDateString() : '';
+  $('buyer').textContent = order.buyer_name + ' · ' + order.code;
+  $('email').textContent = order.buyer_email;
+  $('items').innerHTML = order.items.map(i => `<li>${i.quantity} × ${i.label}</li>`).join('');
+  $('history').innerHTML = order.pickups.length ? '<small>' + order.pickups.map(p => `Handed over ${new Date(p.at).toLocaleString()} by ${p.volunteer}${p.presented_by ? ' to ' + p.presented_by : ''} (${p.quantity})`).join('<br>') + '</small>' : '';
+  const done = order.quantity_picked >= order.quantity_total || order.status === 'cancelled' || order.status === 'needs_review';
+  $('confirmBox').hidden = done;
+  let why = '';
+  if (order.status === 'cancelled') why = 'Order cancelled. Do not hand out.';
+  else if (order.status === 'needs_review') why = 'On hold (refund request or parse problem). An officer must clear it on the admin page first.';
+  else if (done) why = 'Already picked up. Do not hand out another shirt.';
+  $('confirmMsg').innerHTML = done ? `<div class="msg bad">${why}</div>` : '';
+}
+
+async function lookup(){
+  $('lookupMsg').innerHTML = '';
+  const code = $('code').value.trim();
+  if(!code) return;
+  const r = await fetch('/api/orders/lookup?code=' + encodeURIComponent(code));
+  const j = await r.json();
+  if(!j.found){ $('result').hidden = true; $('lookupMsg').innerHTML = `<div class="msg bad">${j.reason || 'Not found'}</div>`; return; }
+  show(j.order);
+}
+async function search(){
+  $('lookupMsg').innerHTML = '';
+  const q = $('q').value.trim();
+  const r = await fetch('/api/orders/lookup?q=' + encodeURIComponent(q));
+  const j = await r.json();
+  if(!j.found){ $('lookupMsg').innerHTML = `<div class="msg bad">No matching orders.</div>`; return; }
+  if(j.orders.length === 1){ show(j.orders[0]); return; }
+  $('result').hidden = true; $('multi').hidden = false;
+  $('multiList').innerHTML = j.orders.map(o => `<button class="secondary" data-id="${o.id}">${o.buyer_name} · ${o.code} · ${o.status.replace('_',' ')} · ${o.items.map(i=>i.quantity+'×'+(i.size||'?')).join(', ')}</button>`).join('');
+  $('multiList').querySelectorAll('button').forEach(b => b.onclick = () => show(j.orders.find(o => o.id == b.dataset.id)));
+}
+async function confirmPickup(){
+  const volunteer = $('volunteer').value.trim();
+  if(!volunteer){ $('confirmMsg').innerHTML = '<div class="msg bad">Enter your name first.</div>'; return; }
+  try { localStorage.setItem('merch_volunteer', volunteer); } catch (e) {}
+  const fd = new FormData(); fd.append('volunteer', volunteer); fd.append('presented_by', $('presented').value.trim());
+  const r = await fetch(`/api/orders/${current.id}/pickup`, {method:'POST', body: fd});
+  const j = await r.json();
+  if(j.ok){ show(j.order); $('confirmMsg').innerHTML = '<div class="msg ok">Recorded. Hand over the order.</div>'; $('code').value=''; }
+  else { if(j.order) show(j.order); $('confirmMsg').innerHTML = `<div class="msg bad">${j.message || j.detail || 'Could not record'}</div>`; }
+}
+$('lookup').onclick = lookup; $('search').onclick = search; $('confirm').onclick = confirmPickup;
+$('code').addEventListener('keydown', e => { if(e.key === 'Enter') lookup(); });
+$('q').addEventListener('keydown', e => { if(e.key === 'Enter') search(); });
+
+let scanner = null;
+$('scan').onclick = async () => {
+  const box = $('reader');
+  if(scanner){ await scanner.stop(); scanner = null; box.hidden = true; $('scan').textContent = 'Scan QR'; return; }
+  box.hidden = false; $('scan').textContent = 'Stop scanning';
+  scanner = new Html5Qrcode('reader');
+  scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 220 }, async (text) => {
+    $('code').value = text; await scanner.stop(); scanner = null; box.hidden = true; $('scan').textContent = 'Scan QR'; lookup();
+  }, () => {});
+};
+</script>
+</body>
+</html>
