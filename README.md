@@ -11,13 +11,13 @@ to the GBM and tapping "Confirm handed over".
 
 | Path | What it is |
 |---|---|
-| `service/` | The Merch Desk service: order intake, pickup codes, buyer emails, support agent, volunteer and admin pages. Python, FastAPI, SQLAlchemy, Postgres. Deployed on Railway. |
+| `service/` | The Merch Desk service: order intake, pickup codes, buyer emails, support agent, volunteer and admin pages. Python, FastAPI, SQLAlchemy, Postgres. Deployed on Sheltie, ScottyLabs' self-hosted Coolify. |
 | `service/README.md` | Operator documentation for the service: flow, setup, deploy, runbook. |
 | `assets/` | Product photography for the ScottyLabs Found T-Shirt (front, back, and a combined front-and-back image). |
 | `.env.example` (in `service/`) | Every environment variable the service reads, with comments. |
 
 Secrets never live in this repo. Real values go in a local `.env` (ignored by git) and in
-Railway variables.
+the service's environment variables on Sheltie.
 
 ## Capabilities
 
@@ -37,7 +37,7 @@ missed webhook never means a missed order.
 emails captured from a live order: the officer notification (buyer name, order number,
 item rows, total, timestamp, but no buyer email) and the buyer receipt (the same table
 plus the buyer's address in the footer). Unknown formats go through a generic parser,
-then an OpenAI Structured Outputs extraction that is validated against the email text,
+then an LLM extraction via OpenRouter (strict JSON schema) that is validated against the email text,
 then a review queue with an alert to the org. Nothing is dropped silently.
 
 **Pickup codes.** Each order gets a unique code such as `SL-7K3Q-9RT2`, drawn from an
@@ -58,7 +58,7 @@ confirm on the same order is refused and shows who handed it over and when. Name
 email search covers buyers who lost the code.
 
 **Support agent.** Every inbound email that is not a purchase or refund notification
-goes to an OpenAI-backed agent (gpt-6-astra) with a fixed knowledge base and the
+goes to an LLM agent via OpenRouter (gpt-6-astra by default) with a fixed knowledge base and the
 sender's own orders. It answers lost-code, delegate, can't-make-it, order-status,
 sizing, how-to-buy, and about-the-org questions. Guardrails are enforced in code: orders
 are looked up only by the sender's address, a reply may never contain a code the sender
@@ -94,7 +94,7 @@ flowchart LR
 
 ## Getting started
 
-Operator setup, deployment to Railway, Gmail forwarding, and the runbook are in
+Operator setup, deployment to Sheltie, Gmail forwarding, and the runbook are in
 [`service/README.md`](service/README.md). The short version:
 
 ```bash

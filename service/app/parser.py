@@ -12,7 +12,7 @@ Two real templates (captured 2026-09-06, see tests/fixtures/):
                          "This message is intended for <buyer email>".
 
 Parsing order: the TartanConnect template parser first, then a generic regex
-parser for anything else, then (if OPENAI_API_KEY is set) an LLM extraction
+parser for anything else, then (if OPENROUTER_API_KEY is set) an LLM extraction
 whose output is validated against the text. A result is *complete* when it has
 items and a buyer email; it is *parsable* when it has items and either a buyer
 name or an order number, in which case the order is created and the email is
@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 
 from .config import settings
+from .llm import structured_json
 
 log = logging.getLogger(__name__)
 
@@ -368,31 +369,19 @@ ORDER_SCHEMA = {
 
 
 def parse_with_llm(text: str, subject: str = "") -> Optional[ParsedOrder]:
-    if not settings.openai_api_key:
-        return None
-    try:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=settings.openai_api_key)
-        response = client.responses.create(
-            model=settings.openai_model,
-            input=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You extract structured purchase data from a campus store notification email. "
-                        "Return only what is literally present. The buyer is the student who paid, never the "
-                        "organization or platform. If no buyer email is present, return an empty string for it. "
-                        "Sizes are one of XS,S,M,L,XL,XXL,XXXL or null."
-                    ),
-                },
-                {"role": "user", "content": f"Subject: {subject}\n\n{text[:12000]}"},
-            ],
-            text={"format": {"type": "json_schema", "name": "purchase", "schema": ORDER_SCHEMA, "strict": True}},
-        )
-        data = json.loads(response.output_text)
-    except Exception as exc:
-        log.warning("LLM parse failed: %s", exc)
+    data = structured_json(
+        label="LLM parse",
+        system=(
+            "You extract structured purchase data from a campus store notification email. "
+            "Return only what is literally present. The buyer is the student who paid, never the "
+            "organization or platform. If no buyer email is present, return an empty string for it. "
+            "Sizes are one of XS,S,M,L,XL,XXL,XXXL or null."
+        ),
+        user=f"Subject: {subject}\n\n{text[:12000]}",
+        schema_name="purchase",
+        schema=ORDER_SCHEMA,
+    )
+    if data is None:
         return None
 
     items = []

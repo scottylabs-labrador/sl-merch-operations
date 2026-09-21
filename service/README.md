@@ -12,7 +12,7 @@ flowchart LR
     A[Buyer checks out on TartanConnect] --> B[TartanConnect emails officer:<br/>'New store purchase']
     B --> C[Gmail filter auto-forwards to<br/>scottylabs-merch@agentmail.to]
     C --> D[AgentMail webhook<br/>message.received]
-    D --> E[Service on Railway<br/>parse → order → code SL-XXXX-XXXX]
+    D --> E[Service on Sheltie<br/>parse → order → code SL-XXXX-XXXX]
     E --> F[Email buyer: code + QR + pickup rules]
     E --> G[(Postgres)]
     H[Volunteer at GBM<br/>/pickup page] --> G
@@ -34,7 +34,7 @@ flowchart LR
    comes first: the buyer forwarding their receipt to the inbox (matched by
    order number, code sent within a minute), an officer uploading the Sales
    report on `/admin`, or an officer typing it on `/admin`. Unknown formats go
-   through a generic regex parser, then OpenAI Structured Outputs (validated
+   through a generic regex parser, then an LLM via OpenRouter (strict JSON, validated
    against the text), then `needs_review` with an alert to the org.
 3. **Order + code.** One `orders` row per checkout with a random 8-character
    code (alphabet without 0/O/1/I/L/U), unique in the DB. Duplicate
@@ -48,7 +48,7 @@ flowchart LR
    code, see the buyer and items, enter their own name (and the delegate's if
    any), tap confirm. A second confirm on the same order returns 409 with who
    handed it over and when. Name/email search covers buyers who lost the code.
-6. **Replies.** Buyer replies thread back to the inbox. With OpenAI the intent
+6. **Replies.** Buyer replies thread back to the inbox. With an OpenRouter key the intent
    is classified into `code_request` / `delegate` / `cant_make_it` and answered
    from fixed templates (the model never free-writes to buyers); anything else,
    or no key, is forwarded to scottylabs@cmu.edu.
@@ -66,6 +66,7 @@ service/
     main.py        FastAPI routes: webhook, /pickup, /admin, CSV, reconcile
     webhook.py     Svix verification, classification, purchase handling
     parser.py      deterministic + LLM extraction
+    llm.py         the one structured-JSON model call (OpenRouter)
     orders.py      create order, send code email, record pickup, bring list
     responder.py   buyer reply intents + templated auto-replies
     agentmail.py   tiny REST client
@@ -78,7 +79,7 @@ service/
     register_webhook.py   create the AgentMail webhook, prints the secret once
     simulate_purchase.py  send a synthetic purchase email into the inbox
   tests/           pytest: codes, parser, full webhook→pickup flow (SQLite)
-  Dockerfile, railway.json, .env.example
+  Dockerfile, .env.example
 ```
 
 ## Local run
@@ -95,35 +96,38 @@ Without `DATABASE_URL` it uses `./merch.db` (SQLite). Without
 `AGENTMAIL_WEBHOOK_SECRET` the webhook accepts unsigned JSON, which is only
 allowed on SQLite; production refuses to start processing without the secret.
 
-## Deploy to Railway
+## Deploy on Sheltie
 
-```bash
-cd service
-railway init            # new project "scottylabs-merch"
-railway add --database postgres
-railway up              # builds the Dockerfile
-railway domain          # note the https URL
-```
+Sheltie is ScottyLabs' Coolify instance (https://sheltie.scottylabs.org). The
+service runs there as project **merch-operations** with a managed Postgres.
 
-Set variables (Railway → service → Variables), from `.env.example`:
+1. **Projects → merch-operations → production → + New Resource → Public Repository.**
+   Repository `https://github.com/scottylabs-labrador/sl-merch-operations`, branch
+   `main`, build pack **Dockerfile**, base directory `/service`, port `8000`,
+   health check path `/health`.
+2. **Environment variables**, from `.env.example`:
 
 | variable | value |
 |---|---|
-| `AGENTMAIL_API_KEY` | the inbox-scoped key already in the repo-root `.env` |
+| `AGENTMAIL_API_KEY` | the inbox-scoped key for the merch inbox |
 | `AGENTMAIL_INBOX_ID` | `scottylabs-merch@agentmail.to` |
-| `DATABASE_URL` | reference the Postgres plugin's `DATABASE_URL` |
-| `PUBLIC_BASE_URL` | the Railway https URL |
+| `DATABASE_URL` | the Postgres resource's internal URL (copy from its page in Sheltie) |
+| `PUBLIC_BASE_URL` | `https://merch.sheltie.scottylabs.org` |
 | `VOLUNTEER_PASSCODE`, `ADMIN_PASSCODE`, `SESSION_SECRET` | long random strings |
-| `OPENAI_API_KEY` | optional, enables parse fallback + reply assistant |
-| `OPENAI_MODEL` | `gpt-6-astra` (flagship; 2–5 s per call). Any Responses-API model with Structured Outputs works |
+| `OPENROUTER_API_KEY` | optional, enables parse fallback, reply intents, support desk |
+| `LLM_MODEL` | `openai/gpt-6-astra` by default. Any OpenRouter model that supports structured outputs works; `anthropic/claude-sonnet-5` or `openai/gpt-5-mini` are cheaper |
+| `TRUSTED_SENDERS` | platform sender plus the officer whose Gmail forwards |
 | `GBM_INFO` | one sentence with day/time/room, shown in every buyer email |
 
-Then register the webhook and store its secret:
+3. **Deploy**, then register the webhook against the new URL and store its secret:
 
 ```bash
-python3 scripts/register_webhook.py https://<railway-domain>/webhooks/agentmail
-# prints AGENTMAIL_WEBHOOK_SECRET=whsec_... → add it to Railway variables, redeploy
+python3 scripts/register_webhook.py https://merch.sheltie.scottylabs.org/webhooks/agentmail
+# prints AGENTMAIL_WEBHOOK_SECRET=whsec_... → add it as a variable on Sheltie, redeploy
 ```
+
+Pushes to `main` redeploy automatically once the GitHub App is connected; until
+then, use **Redeploy** in Sheltie or `coolify deploy` from the CLI.
 
 ## Gmail forwarding (one-time, done by the merch officer in Gmail's UI)
 
@@ -169,8 +173,8 @@ same notification and therefore the same pickup-code flow.
 * Suspicious duplicate: `/admin` → set status `cancelled`; codes for cancelled
   orders are refused at pickup.
 * Missed notification: `/admin` → upload the Sales report CSV.
-* Rotate passcodes: change the Railway variable; existing cookies expire in 12h.
-* New officer next year: they need the Railway project, the AgentMail account,
+* Rotate passcodes: change the variable on Sheltie and redeploy; existing cookies expire in 12h.
+* New officer next year: they need Admin on Sheltie, the AgentMail account,
   and the Gmail filter moved to their account (or the guest-officer approach).
 
 ## Security notes
