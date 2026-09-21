@@ -41,7 +41,7 @@ def create_order(
     """
     purchased_at = purchased_at or parsed.purchased_at or utcnow()
     minute = purchased_at.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M")
-    dedup = parsed.dedup_hash(minute)
+    dedup = parsed.dedup_override or parsed.dedup_hash(minute)
     if not parsed.buyer_email and status == "pending":
         status = "needs_email"
 

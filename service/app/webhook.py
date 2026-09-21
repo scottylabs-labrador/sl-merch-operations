@@ -105,12 +105,20 @@ def handle_event(session: Session, payload: Dict[str, Any], client: Optional[Age
         if from_addr in settings.trusted_senders and re.search(r"refund", subject, re.IGNORECASE):
             _handle_refund(session, record, text, client)
         elif from_addr in settings.trusted_senders and is_purchase_notification(subject, text):
-            _handle_purchase(session, record, msg, text, client)
+            if settings.email_order_intake:
+                _handle_purchase(session, record, msg, text, client)
+            else:
+                record.classification = "ignored"
+                record.detail = "purchase notification; email intake is off, orders come from the store export on /admin"
         elif from_addr in settings.platform_senders:
             record.classification = "ignored"
             record.detail = "platform notification that is not a purchase"
         elif re.search(r"successfully purchased", subject + " " + text[:4000], re.IGNORECASE) and ORDER_RE.search(text):
-            _handle_forwarded_receipt(session, record, msg, text, client)
+            if settings.email_order_intake:
+                _handle_forwarded_receipt(session, record, msg, text, client)
+            else:
+                record.classification = "ignored"
+                record.detail = "forwarded receipt; email intake is off, orders come from the store export on /admin"
         else:
             matched = session.scalar(select(Order).where(Order.code_email_thread_id == thread_id)) if thread_id else None
             record.classification = "buyer_reply" if matched else "support"

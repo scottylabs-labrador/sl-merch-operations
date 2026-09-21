@@ -69,6 +69,8 @@ class ParsedOrder:
     kind: str = "unknown"  # officer | buyer_receipt | generic
     source: str = "deterministic"
     warnings: List[str] = field(default_factory=list)
+    # Set by intake paths that know the order's stable identity (the store export).
+    dedup_override: Optional[str] = None
 
     @property
     def is_complete(self) -> bool:

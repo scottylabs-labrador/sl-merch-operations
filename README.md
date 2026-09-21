@@ -27,13 +27,16 @@ pickup policy, tax-included pricing so checkout shows a flat price, and a requir
 checkout question the buyer must answer to acknowledge in-person pickup. The store's
 instructions banner and its receipt footer repeat the policy.
 
-**Order intake with no platform API.** TartanConnect emails an officer on every store
-purchase. A Gmail filter on that officer's account forwards those notifications to an
-AgentMail inbox owned by the service. AgentMail delivers each message to the service by
-webhook (Svix signed), and a once-a-minute poller reads the inbox as a backstop so a
-missed webhook never means a missed order.
+**Order intake from the store export.** TartanConnect has no API, so an officer
+downloads the store's order export (Store → Sales → download CSV) and uploads it on the
+admin page. The upload is previewed first: new checkouts, ones already known, refunds
+to cancel, and rows that were skipped. Re-uploading the full history is the normal
+workflow and is safe: each checkout is identified by buyer, timestamp and items, so
+known orders are never duplicated and never emailed twice. Creating orders from emails
+(the officer notification or a buyer-forwarded receipt) is off by default because a
+forwarded receipt can be faked; `EMAIL_ORDER_INTAKE=1` turns it back on.
 
-**Parsing built on the real templates.** The parser understands both TartanConnect
+**Email parsing, when email intake is on.** The parser understands both TartanConnect
 emails captured from a live order: the officer notification (buyer name, order number,
 item rows, total, timestamp, but no buyer email) and the buyer receipt (the same table
 plus the buyer's address in the footer). Unknown formats go through a generic parser,
@@ -45,8 +48,9 @@ alphabet without 0, O, 1, I, L, or U so it can be read aloud at a noisy table. T
 buyer receives it by email with an inline QR image and the rules: pickup only at the
 GBM, no shipping, a friend may present the code, each code works once.
 
-**Buyer email resolution.** Because the officer notification omits the buyer's email,
-an order can exist with a code and no address. The address is filled in by whichever
+**Buyer email resolution (email intake only).** The store export always carries the
+buyer's email. Only the officer notification omits it, so with email intake on an order
+can exist with a code and no address. The address is filled in by whichever
 arrives first: the buyer forwards their receipt to the merch inbox (matched by order
 number, code sent within a minute), an officer uploads the Sales report on the admin
 page, or an officer types it in. Orders still awaiting an address can be handed over by
@@ -70,8 +74,8 @@ forwarded to the org with a summary.
 pending orders so the table refuses the code until an officer decides.
 
 **Admin page.** Live bring list by size, orders table with resend and status controls,
-a section for orders awaiting a buyer email, a manual order form, Sales report upload
-for reconciliation, a manual inbox poll, and a reprocess button per inbound email.
+the store-export upload with preview, a manual order form, a manual inbox poll, and a
+reprocess button per inbound email.
 
 **Weekly bring list.** Every Tuesday morning the org gets an email with how many of each
 size to bring and how many orders are waiting for a buyer email.
@@ -80,15 +84,15 @@ size to bring and how many orders are waiting for a buyer email.
 
 ```mermaid
 flowchart LR
-    A[Buyer checks out on TartanConnect] --> B[TartanConnect emails the officer]
-    B --> C[Gmail filter forwards to the AgentMail inbox]
-    C --> D[Webhook or poller delivers to the service]
-    D --> E[Parse, dedupe, mint code]
+    A[Buyer checks out on TartanConnect] --> B[Officer downloads the store export]
+    B --> C[Upload on /admin, preview, confirm]
+    C --> E[Group rows, dedupe, mint code]
+    D[Buyer emails the merch inbox] --> I
     E --> F[Buyer email with code and QR]
     E --> G[(Postgres)]
     H[Volunteer phone page] --> G
     F -. reply .-> D
-    D --> I[Support agent answers or escalates]
+    I[Support agent answers or escalates]
     J[Tuesday cron] --> K[Bring list to the org]
 ```
 

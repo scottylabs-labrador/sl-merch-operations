@@ -29,6 +29,15 @@
 <main>
   {% if request.query_params.get('flash') %}<div class="flash">{{ request.query_params.get('flash') }}</div>{% endif %}
 
+  <div class="card" id="upload">
+    <h3>Upload the latest store export</h3>
+    <p><small>TartanConnect → Store → Sales → download the orders CSV, then upload it here. You get a preview first. Known orders are skipped, new ones get a pickup code by email, refunded ones are cancelled. Re-uploading the full history is safe.</small></p>
+    <form method="post" action="/admin/upload" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".csv,text/csv" required>
+      <button>Preview</button>
+    </form>
+  </div>
+
   <div class="grid">
     <div class="card">
       <h3>Bring to the next GBM</h3>
@@ -44,23 +53,13 @@
 
     <div class="card">
       <h3>Awaiting buyer email ({{ awaiting|length }})</h3>
-      <p><small>TartanConnect's officer notification has the buyer's name but not their email. Fill it in here (Store → Sales shows it), upload the Sales report below, or wait for the buyer to forward their receipt.</small></p>
+      <p><small>Only orders created from emails can lack an address; the store export always has it. Fill it in here or upload the export above.</small></p>
       {% for o in awaiting %}
       <form method="post" action="/admin/orders/{{ o.id }}/email" style="margin:6px 0">
         <code>{{ o.pickup_code }}</code> {{ o.buyer_name }} · {{ o.summary() }}<br>
         <input name="email" type="email" placeholder="buyer@andrew.cmu.edu" required> <button>Save & send code</button>
       </form>
       {% else %}<p>None.</p>{% endfor %}
-    </div>
-
-    <div class="card">
-      <h3>Reconcile with TartanConnect</h3>
-      <p><small>Store → Sales → Generate Report, then upload the CSV. Any purchase the service never saw gets an order and a code email.</small></p>
-      <form method="post" action="/admin/reconcile" enctype="multipart/form-data">
-        <input type="file" name="file" accept=".csv,text/csv" required>
-        <label><input type="checkbox" name="send_email" value="yes" checked> email codes to new buyers</label>
-        <button>Upload</button>
-      </form>
     </div>
 
     <div class="card">

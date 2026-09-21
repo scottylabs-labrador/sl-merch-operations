@@ -1,7 +1,10 @@
 """FastAPI application: webhook intake, volunteer pickup page, admin page."""
 from __future__ import annotations
 
+import base64
+from collections import Counter
 import csv
+import re
 import datetime as dt
 import hmac
 import io
@@ -21,6 +24,7 @@ from .agentmail import AgentMail, AgentMailError
 from .codes import normalize_code
 from .config import settings
 from .db import InboundEmail, Order, OrderItem, find_order_by_code, get_session, init_db
+from .store_export import ExportFormatError, commit_store_export, parse_store_export, plan_store_export
 from .orders import DuplicateOrder, create_order, find_order_by_reference, record_pickup, resolve_buyer_email, send_code_email, unpicked_by_size
 from .parser import ParsedItem, ParsedOrder
 from .scheduler import send_bring_list, start_scheduler
@@ -303,75 +307,43 @@ def manual_order(
     return RedirectResponse(f"/admin?flash=created-{order.pickup_code}", status_code=303)
 
 
-@app.post("/admin/reconcile")
-async def reconcile(file: UploadFile = File(...), send_email: str = Form("yes"), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
-    """Upload TartanConnect's Store Sales report (CSV). Creates orders for any purchase we never saw.
+@app.post("/admin/upload", response_class=HTMLResponse)
+async def upload_preview(request: Request, file: UploadFile = File(...), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    """Step 1 of the store-export upload: parse, plan, show what would happen. Writes nothing."""
+    raw = await file.read()
+    try:
+        orders, skipped = parse_store_export(raw.decode("utf-8-sig", errors="replace"))
+    except ExportFormatError as exc:
+        return RedirectResponse(f"/admin?flash=upload-rejected-{re.sub(r'[^A-Za-z0-9 ,;:._-]', '', str(exc))[:200]}", status_code=303)
+    plan = plan_store_export(session, orders)
+    return templates.TemplateResponse(
+        request,
+        "upload_preview.html",
+        {
+            "plan": plan,
+            "skipped": skipped,
+            "counts": Counter(p.action for p in plan),
+            "csv_b64": base64.b64encode(raw).decode(),
+            "filename": file.filename or "export.csv",
+            "org": settings.org_name,
+        },
+    )
 
-    Column names differ between CampusGroups exports, so matching is fuzzy: any
-    column containing 'email', 'first'/'last'/'name', 'product'/'item', 'quantity'/'qty', 'date'.
-    """
-    raw = (await file.read()).decode("utf-8-sig", errors="replace")
-    reader = csv.DictReader(io.StringIO(raw))
-    created, resolved, dupes, skipped = 0, 0, 0, 0
-    for row in reader:
-        cols = {k.lower(): (v or "").strip() for k, v in row.items() if k}
-        email = next((v for k, v in cols.items() if "email" in k), "")
-        first = next((v for k, v in cols.items() if "first" in k), "")
-        last = next((v for k, v in cols.items() if "last" in k), "")
-        name = (first + " " + last).strip() or next((v for k, v in cols.items() if k == "name" or "buyer" in k), "")
-        product = next((v for k, v in cols.items() if "product" in k or "item" in k), "")
-        qty_raw = next((v for k, v in cols.items() if "quantity" in k or k == "qty"), "1")
-        date_raw = next((v for k, v in cols.items() if "date" in k), "")
-        ref = next((v for k, v in cols.items() if "transaction" in k or "receipt" in k or "reference" in k or k.endswith(" id")), "")
-        if not email or not product:
-            skipped += 1
-            continue
-        from .parser import SIZE_RE
 
-        sm = SIZE_RE.search(product)
-        try:
-            qty = int(float(qty_raw or "1"))
-        except ValueError:
-            qty = 1
-        purchased_at = None
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%m/%d/%Y %H:%M", "%m/%d/%Y", "%Y-%m-%d"):
-            try:
-                purchased_at = dt.datetime.strptime(date_raw, fmt).replace(tzinfo=dt.timezone.utc)
-                break
-            except ValueError:
-                continue
-        # 1) An order we already know (officer notification) that lacks an email: fill it in.
-        match = find_order_by_reference(session, ref.lstrip("#") if ref else None)
-        if match is None and name:
-            candidates = session.scalars(select(Order).where(Order.status == "needs_email", func.lower(Order.buyer_name) == name.lower())).all()
-            candidates = [o for o in candidates if any(product.strip().lower()[:40] == i.product_name.lower()[:40] for i in o.items)] or candidates
-            if len(candidates) == 1:
-                match = candidates[0]
-        if match is not None:
-            if not match.buyer_email:
-                resolve_buyer_email(session, match, email, send=(send_email == "yes"))
-                resolved += 1
-            else:
-                dupes += 1
-            continue
-        # 2) Never seen: create it.
-        parsed = ParsedOrder(
-            buyer_name=name or email.split("@")[0],
-            buyer_email=email.lower(),
-            items=[ParsedItem(product_name=product, quantity=max(qty, 1), size=sm.group(1).upper() if sm else None, unit_price_cents=1000)],
-            total_cents=1000 * max(qty, 1),
-            tc_reference=(ref.lstrip("#") or None) if ref else None,
-            source="reconcile",
-        )
-        try:
-            order = create_order(session, parsed, purchased_at=purchased_at)
-        except DuplicateOrder:
-            dupes += 1
-            continue
-        created += 1
-        if send_email == "yes":
-            send_code_email(session, order)
-    return RedirectResponse(f"/admin?flash=reconciled-created-{created}-resolved-{resolved}-dupes-{dupes}-skipped-{skipped}", status_code=303)
+@app.post("/admin/upload/commit")
+def upload_commit(csv_b64: str = Form(...), send_email: str = Form("no"), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    """Step 2: re-parse the same file, re-plan against the current database, apply."""
+    try:
+        text = base64.b64decode(csv_b64).decode("utf-8-sig", errors="replace")
+        orders, skipped = parse_store_export(text)
+    except (ValueError, ExportFormatError) as exc:
+        return RedirectResponse(f"/admin?flash=upload-rejected-{re.sub(r'[^A-Za-z0-9 ,;:._-]', '', str(exc))[:200]}", status_code=303)
+    plan = plan_store_export(session, orders)
+    result = commit_store_export(session, plan, send_email == "yes")
+    return RedirectResponse(
+        f"/admin?flash=upload-created-{len(result.created)}-emailed-{result.emailed}-cancelled-{result.cancelled}-duplicates-{result.duplicates}-resolved-{result.resolved}-skipped-{result.skipped + len(skipped)}",
+        status_code=303,
+    )
 
 
 @app.post("/admin/bring-list")

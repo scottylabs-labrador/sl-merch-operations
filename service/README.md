@@ -9,33 +9,36 @@ handoffs. The only human work is bringing shirts to the GBM and tapping
 
 ```mermaid
 flowchart LR
-    A[Buyer checks out on TartanConnect] --> B[TartanConnect emails officer:<br/>'New store purchase']
-    B --> C[Gmail filter auto-forwards to<br/>scottylabs-merch@agentmail.to]
-    C --> D[AgentMail webhook<br/>message.received]
-    D --> E[Service on Sheltie<br/>parse → order → code SL-XXXX-XXXX]
+    A[Buyer checks out on TartanConnect] --> B[Order appears in the store's export]
+    B --> C[Officer downloads the store export CSV]
+    C --> D[Upload on /admin → preview → confirm]
+    D --> E[Service on Sheltie<br/>group rows → order → code SL-XXXX-XXXX]
     E --> F[Email buyer: code + QR + pickup rules]
     E --> G[(Postgres)]
     H[Volunteer at GBM<br/>/pickup page] --> G
-    F -. buyer replies .-> D
-    D --> I[Auto-reply for code / delegate / can't-make-it<br/>everything else forwarded to scottylabs@cmu.edu]
+    F -. buyer replies .-> W[AgentMail inbox webhook]
+    W --> I[Auto-reply for code / delegate / can't-make-it<br/>everything else forwarded to scottylabs@cmu.edu]
     J[Tuesday 09:00 cron] --> K[Bring list by size → scottylabs@cmu.edu]
 ```
 
-1. **Intake.** TartanConnect's officer notification "New store purchase" (email
-   channel, enabled for the merch officer) lands in Gmail. A Gmail filter forwards
-   it verbatim to the AgentMail inbox. AgentMail POSTs a `message.received`
-   event to `/webhooks/agentmail` (Svix-signed).
-2. **Parse.** `app/parser.py` knows both real TartanConnect templates (captured
-   in `tests/fixtures/`): the officer notification ("<Buyer> successfully
-   purchased from the store", order number, item rows, total, timestamp) and the
-   buyer receipt (same table plus "This message is intended for <email>").
-   The officer notification has **no buyer email**, so the order is created with
-   its code in status `needs_email` and the address is filled in by whichever
-   comes first: the buyer forwarding their receipt to the inbox (matched by
-   order number, code sent within a minute), an officer uploading the Sales
-   report on `/admin`, or an officer typing it on `/admin`. Unknown formats go
-   through a generic regex parser, then an LLM via OpenRouter (strict JSON, validated
-   against the text), then `needs_review` with an alert to the org.
+1. **Intake.** An officer downloads the store export from TartanConnect
+   (Store → Sales → download CSV; `tests/fixtures/store_export.csv` is the
+   shape) and uploads it on `/admin`. `app/store_export.py` groups the one-row-
+   per-item file back into checkouts by buyer email and timestamp, reads the
+   size out of the listing name, and shows a **preview**: new orders, ones
+   already known, refunds to cancel, rows skipped (non-merch items such as the
+   $1 test donation, bad dates). Confirming creates the new orders and emails
+   their codes. Uploading the whole history again later is the intended
+   workflow: an order's identity is (email, timestamp, items), so nothing is
+   duplicated or emailed twice, and a row whose status turned to Refunded
+   cancels its order.
+2. **Email intake (off by default).** With `EMAIL_ORDER_INTAKE=1` the service
+   also creates orders from TartanConnect's officer notification forwarded by
+   Gmail, and from buyer-forwarded receipts. `app/parser.py` knows both real
+   templates (captured in `tests/fixtures/`); the officer notification has no
+   buyer email, so those orders start as `needs_email` and the next export
+   upload fills the address in. This path is off because a forwarded receipt
+   can be faked. Support and buyer replies still arrive by email either way.
 3. **Order + code.** One `orders` row per checkout with a random 8-character
    code (alphabet without 0/O/1/I/L/U), unique in the DB. Duplicate
    notifications (Svix retries, double forwards) are recognized by event id,
@@ -54,9 +57,8 @@ flowchart LR
    or no key, is forwarded to scottylabs@cmu.edu.
 7. **Bring list.** Every Tuesday 09:00 (configurable) the org gets "bring N of
    each size" for all unpicked orders. `/admin` shows the same live.
-8. **Reconcile.** Upload TartanConnect's Store → Sales → Generate Report CSV on
-   `/admin`; any purchase the service never saw becomes an order and the buyer
-   gets a code. This is the safety net if a notification is ever missed.
+8. **Reconcile.** Same page, same upload: the latest export always brings the
+   database back in line with the store.
 
 ## Layout
 
@@ -65,7 +67,8 @@ service/
   app/
     main.py        FastAPI routes: webhook, /pickup, /admin, CSV, reconcile
     webhook.py     Svix verification, classification, purchase handling
-    parser.py      deterministic + LLM extraction
+    store_export.py  the store export: parse, preview plan, commit (primary intake)
+    parser.py      email templates: deterministic + LLM extraction (optional intake)
     llm.py         the one structured-JSON model call (OpenRouter)
     orders.py      create order, send code email, record pickup, bring list
     responder.py   buyer reply intents + templated auto-replies
@@ -116,7 +119,9 @@ service runs there as project **merch-operations** with a managed Postgres.
 | `VOLUNTEER_PASSCODE`, `ADMIN_PASSCODE`, `SESSION_SECRET` | long random strings |
 | `OPENROUTER_API_KEY` | optional, enables parse fallback, reply intents, support desk |
 | `LLM_MODEL` | `openai/gpt-6-astra` by default. Any OpenRouter model that supports structured outputs works; `anthropic/claude-sonnet-5` or `openai/gpt-5-mini` are cheaper |
-| `TRUSTED_SENDERS` | platform sender plus the officer whose Gmail forwards |
+| `TRUSTED_SENDERS` | platform sender plus the officer whose Gmail forwards (email intake only) |
+| `EMAIL_ORDER_INTAKE` | `0` (default). `1` also creates orders from emailed notifications and receipts |
+| `EXPORT_IGNORE_ITEMS` | `donation` by default; export rows whose item contains this are not merch |
 | `GBM_INFO` | one sentence with day/time/room, shown in every buyer email |
 
 3. **Deploy**, then register the webhook against the new URL and store its secret:
@@ -172,7 +177,7 @@ same notification and therefore the same pickup-code flow.
   sends from agentmail.to with SPF/DKIM/DMARC passing).
 * Suspicious duplicate: `/admin` → set status `cancelled`; codes for cancelled
   orders are refused at pickup.
-* Missed notification: `/admin` → upload the Sales report CSV.
+* Order missing: download the latest store export and upload it on `/admin`.
 * Rotate passcodes: change the variable on Sheltie and redeploy; existing cookies expire in 12h.
 * New officer next year: they need Admin on Sheltie, the AgentMail account,
   and the Gmail filter moved to their account (or the guest-officer approach).

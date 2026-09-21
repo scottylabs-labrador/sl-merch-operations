@@ -1,0 +1,6 @@
+Buyer First Name,Buyer Last Name,Buyer Email,"Buyer Year Of Graduation","Buyer Account Type",Item Name,Item Price,Quantity,Total Paid,Account,Comments,Status,Date,Notes
+"Jane","Doe","jdoe@andrew.cmu.edu","2027","Undergraduate Student","ScottyLabs Found T-Shirt — Size M","10","1","10","","YES","Ordered","9/6/2026 11:09:21 PM","-"
+"Jane","Doe","jdoe@andrew.cmu.edu","2027","Undergraduate Student","ScottyLabs Found T-Shirt — Size L","10","2","20","","YES","Ordered","9/6/2026 11:09:21 PM","-"
+"Sam","Lee","slee@andrew.cmu.edu","2028","Graduate Student","ScottyLabs Found T-Shirt — Size S","10","1","10","","YES","Ordered","9/8/2026 1:31:44 PM","-"
+"Pat","Officer","officer@andrew.cmu.edu","2027","Undergraduate Student","System Test — $1 donation (officers only, not merch)","1","1","1","","","Ordered","9/8/2026 1:35:00 PM","-"
+"Ravi","Patel","rpatel@andrew.cmu.edu","2026","Undergraduate Student","ScottyLabs Found T-Shirt — Size XL","10","1","10","","YES","Refunded","9/9/2026 9:00:00 AM","-"

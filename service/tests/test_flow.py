@@ -7,6 +7,7 @@ os.environ["AGENTMAIL_WEBHOOK_SECRET"] = ""
 os.environ["VOLUNTEER_PASSCODE"] = "vol"
 os.environ["ADMIN_PASSCODE"] = "adm"
 os.environ["OPENROUTER_API_KEY"] = ""
+os.environ["EMAIL_ORDER_INTAKE"] = "1"
 os.environ["AGENTMAIL_API_KEY"] = ""
 os.environ["SCOTTYLABS_MERCH_AGENTMAIL_API_TOKEN"] = ""
 
@@ -290,14 +291,34 @@ def test_forwarded_receipt_by_stranger_is_escalated(client):
     assert not client.fake.sent and client.fake.forwards
 
 
-def test_reconcile_resolves_awaiting_order(client):
+def test_export_upload_fills_in_email_for_officer_notification_order(client, monkeypatch):
+    """With email intake on, an officer-notification order has no address; the next export upload supplies it."""
+    import base64
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    from app import store_export as store_export_mod
+    from app.db import Order
+
     officer = open(OFFICER, encoding="utf-8").read()
     client.post("/webhooks/agentmail", json=_event("evt-o3", officer, "Jane Tartan successfully purchased from ScottyLabs Merch Store", "TartanConnect <tartanconnect@andrew.cmu.edu>"))
+    with Session(dbmod.engine) as s:
+        o = s.scalar(select(Order))
+        assert o.status == "needs_email"
+        item = o.items[0].product_name
+    monkeypatch.setattr(store_export_mod.settings, "export_ignore_items", [])  # the real test order was the $1 donation listing
     client.post("/login", data={"passcode": "adm", "next": "/admin"})
-    csv_body = "First Name,Last Name,Email,Product,Quantity,Date\nJane,Tartan,jtartan@example.invalid,System Test — $1 donation (officers only, not merch),1,2026-09-06 23:09\n"
-    r = client.post("/admin/reconcile", files={"file": ("sales.csv", csv_body.encode("utf-8"), "text/csv")}, data={"send_email": "yes"}, follow_redirects=False)
+    csv_body = (
+        "Buyer First Name,Buyer Last Name,Buyer Email,Item Name,Item Price,Quantity,Total Paid,Status,Date\n"
+        f'"Jane","Tartan","jtartan@example.invalid","{item}","1","1","1","Ordered","9/6/2026 11:09:21 PM"\n'
+    )
+    r = client.post("/admin/upload/commit", data={"csv_b64": base64.b64encode(csv_body.encode()).decode(), "send_email": "yes"}, follow_redirects=False)
     assert "resolved-1" in r.headers["location"], r.headers["location"]
     assert client.fake.sent and client.fake.sent[0]["to"] == ["jtartan@example.invalid"]
+    with Session(dbmod.engine) as s:
+        o = s.scalar(select(Order))
+        assert o.status == "pending" and o.buyer_email == "jtartan@example.invalid"
 
 
 def test_admin_manual_email_set(client):

@@ -11,5 +11,6 @@ apscheduler>=3.10,<4
 beautifulsoup4>=4.12
 openai>=1.40
 python-dotenv>=1.0
+tzdata>=2024.1
 itsdangerous>=2.1
 pytest>=8.0
