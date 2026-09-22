@@ -61,9 +61,15 @@ see the buyer and items, enter your name and the delegate's if any, confirm. A s
 confirm on the same order is refused and shows who handed it over and when. Name and
 email search covers buyers who lost the code.
 
-**Support agent.** Every inbound email that is not a purchase or refund notification
-goes to an LLM agent via OpenRouter (gpt-6-astra by default) with a fixed knowledge base and the
-sender's own orders. It answers lost-code, delegate, can't-make-it, order-status,
+**Support agent.** Every inbound email that is not a purchase or refund notification is
+first read by Jev, Typesafe's decision model, in one call: is it automated, is it about
+money, someone else's order, or a complaint, what is it asking for, how frustrated is the
+sender. Money, complaints and other people's orders go straight to an officer; the three
+fixed intents (lost code, delegate, can't make it) are answered from templates when the
+sender has one live order; everything else goes to an LLM agent via OpenRouter
+(`z-ai/glm-5.3-flash` on zero-data-retention providers by default) with a fixed knowledge
+base and the sender's own orders. Every LLM-written reply is screened by Jev again before
+it is sent: no promised refunds, no invented pickup logistics, no commitments. It answers lost-code, delegate, can't-make-it, order-status,
 sizing, how-to-buy, and about-the-org questions. Guardrails are enforced in code: orders
 are looked up only by the sender's address, a reply may never contain a code the sender
 does not own, automated mail is never answered, at most one reply per thread per day and
@@ -129,7 +135,10 @@ same notification and the same code flow.
 * Only emails from configured trusted senders can create orders.
 * Buyer replies are matched to orders by the email thread the service started.
 * Model output is schema validated and cross-checked against the source text. The model
-  never composes free text to a buyer without the guardrails above.
+  never composes free text to a buyer without the guardrails above, and every LLM reply is
+  screened by a second, calibrated model before it is sent.
+* LLM calls go only to the configured OpenRouter providers and only to their
+  zero-data-retention endpoints that do not train on prompts.
 * Passcodes are compared in constant time and sessions are signed cookies.
 * No card data ever reaches this service. Payment stays inside TartanConnect and CashNet.
 

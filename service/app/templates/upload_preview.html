@@ -13,7 +13,7 @@
   table{border-collapse:collapse;width:100%;font-size:14px}
   th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #eee;vertical-align:top}
   .tag{font-weight:700;padding:2px 8px;border-radius:6px;font-size:12px;white-space:nowrap}
-  .create{background:#d9f2e3;color:#155a2e}.duplicate{background:#eee;color:#555}.cancel{background:#ffe0e0;color:#7a0b1c}.not_ordered{background:#fff3cd;color:#7a5a00}.resolve_email{background:#e3ecfa;color:#1d3f7a}
+  .create{background:#d9f2e3;color:#155a2e}.duplicate{background:#eee;color:#555}.cancel{background:#ffe0e0;color:#7a0b1c}.not_ordered{background:#fff3cd;color:#7a5a00}.resolve_email{background:#e3ecfa;color:#1d3f7a}.not_merch{background:#fff3cd;color:#7a5a00}
   button{padding:8px 14px;border:0;border-radius:6px;background:#b8102b;color:#fff;font-size:15px}
   button.grey{background:#ddd;color:#111}
   .summary{display:flex;gap:18px;flex-wrap:wrap;font-size:15px}
@@ -32,6 +32,7 @@
       <div><b id="count-duplicate">{{ counts.get('duplicate', 0) }}</b>already known</div>
       <div><b id="count-cancel">{{ counts.get('cancel', 0) }}</b>to cancel (refunded)</div>
       <div><b id="count-not_ordered">{{ counts.get('not_ordered', 0) }}</b>not ordered, skipped</div>
+      {% if counts.get('not_merch') %}<div><b id="count-not_merch">{{ counts.get('not_merch', 0) }}</b>not merch, skipped</div>{% endif %}
       {% if counts.get('resolve_email') %}<div><b id="count-resolve_email">{{ counts.get('resolve_email', 0) }}</b>emails filled in</div>{% endif %}
       <div><b id="count-skipped-rows">{{ skipped|length }}</b>rows skipped</div>
     </div>

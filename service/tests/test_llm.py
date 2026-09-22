@@ -42,7 +42,7 @@ def test_no_key_means_no_client_and_none(monkeypatch):
 
 def test_defaults_point_at_openrouter():
     assert settings.llm_base_url == "https://openrouter.ai/api/v1"
-    assert settings.llm_model.startswith("openai/")
+    assert settings.llm_model == "z-ai/glm-5.3-flash"
 
 
 def test_structured_call_shape_and_parsing(monkeypatch):
@@ -60,7 +60,9 @@ def test_structured_call_shape_and_parsing(monkeypatch):
     assert body["messages"][0]["role"] == "system" and body["messages"][1]["role"] == "user"
     rf = body["response_format"]
     assert rf["type"] == "json_schema" and rf["json_schema"]["name"] == "intent" and rf["json_schema"]["strict"] is True
-    assert body["provider"] == {"require_parameters": True}
+    prov = body["provider"]
+    assert prov["require_parameters"] is True and prov["zdr"] is True and prov["data_collection"] == "deny"
+    assert prov["only"] == ["coreweave", "fireworks", "baseten"] and prov["order"] == prov["only"]
 
 
 def test_provider_failure_degrades_to_none(monkeypatch):

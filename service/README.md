@@ -118,7 +118,10 @@ service runs there as project **merch-operations** with a managed Postgres.
 | `PUBLIC_BASE_URL` | `https://merch.sheltie.scottylabs.org` |
 | `VOLUNTEER_PASSCODE`, `ADMIN_PASSCODE`, `SESSION_SECRET` | long random strings |
 | `OPENROUTER_API_KEY` | optional, enables parse fallback, reply intents, support desk |
-| `LLM_MODEL` | `openai/gpt-6-astra` by default. Any OpenRouter model that supports structured outputs works; `anthropic/claude-sonnet-5` or `openai/gpt-5-mini` are cheaper |
+| `LLM_MODEL` | `z-ai/glm-5.3-flash` by default. Any OpenRouter model that supports structured outputs works |
+| `LLM_PROVIDERS` | `coreweave,fireworks,baseten` by default. OpenRouter provider slugs, tried in order; requests never leave this set |
+| `LLM_ZDR` | `1` by default: only zero-data-retention endpoints that do not train on prompts |
+| `TYPESAFE_API_KEY` | optional, enables Jev: calibrated triage of support mail, templated answers without the LLM, a guardrail on every LLM-written reply, and merch/not-merch judgement on export rows |
 | `TRUSTED_SENDERS` | platform sender plus the officer whose Gmail forwards (email intake only) |
 | `EMAIL_ORDER_INTAKE` | `0` (default). `1` also creates orders from emailed notifications and receipts |
 | `EXPORT_IGNORE_ITEMS` | `donation` by default; export rows whose item contains this are not merch |

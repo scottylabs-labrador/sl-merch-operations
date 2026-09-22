@@ -27,6 +27,8 @@ from sqlalchemy.orm import Session
 
 from .agentmail import AgentMail, AgentMailError
 from .config import settings
+from . import decide
+from .emails import auto_reply_text
 from .llm import structured_json
 from .db import InboundEmail, Order
 
@@ -159,6 +161,13 @@ def handle_support_email(
         session.commit()
         return
 
+    # One calibrated read of the email before anything else happens.
+    triage = decide.triage_email(text, subject, from_addr)
+    if triage is not None and triage.automated >= decide.AUTOMATED_THRESHOLD:
+        record.detail = f"jev: automated message ignored (p={triage.automated:.2f})"
+        session.commit()
+        return
+
     orders = _orders_for_sender(session, from_addr)
     if matched_order and matched_order not in orders:
         # Reply came on a code thread but from a different address: never reveal the code.
@@ -170,7 +179,28 @@ def handle_support_email(
     recent = [r for r in prior if r.received_at and (dt.datetime.now(dt.timezone.utc) - r.received_at.replace(tzinfo=dt.timezone.utc)) < dt.timedelta(hours=24)]
     throttled = len(prior) >= MAX_AUTO_REPLIES_PER_THREAD or bool(recent)
 
-    decision = None if throttled else ask_model(knowledge_base() + "\nSENDER'S ORDERS:\n" + orders_ctx, text, subject, from_addr)
+    # Jev decides the easy cases without the LLM: escalate money, complaints and
+    # questions about other people's orders; answer the three fixed intents from
+    # templates when the sender has exactly one live order.
+    jev_escalate = triage is not None and triage.escalate
+    if triage is not None and not throttled and not jev_escalate and client is not None and triage.category in decide.TEMPLATE_INTENTS and triage.category_confidence >= decide.TEMPLATE_THRESHOLD:
+        pending = [o for o in orders if o.status == "pending"]
+        target = matched_order if (matched_order in orders and matched_order.status == "pending") else (pending[0] if len(pending) == 1 else None)
+        if target is not None:
+            intent = decide.TEMPLATE_INTENTS[triage.category]
+            try:
+                client.reply(record.message_id, text=auto_reply_text(target, intent), labels=["auto-reply", intent])
+                record.detail = f"{AUTO_REPLY_PREFIX} ({intent}, jev conf {triage.category_confidence:.2f})"
+                session.commit()
+                return
+            except AgentMailError as exc:
+                log.error("templated reply failed: %s", exc)
+                record.detail = f"templated reply failed: {exc}"
+
+    context = knowledge_base() + "\nSENDER'S ORDERS:\n" + orders_ctx
+    if triage is not None:
+        context += "\nPRE-CLASSIFICATION (calibrated, from a separate model): " + triage.summary()
+    decision = None if (throttled or jev_escalate) else ask_model(context, text, subject, from_addr)
 
     if decision and decision.get("action") == "ignore" and decision.get("category") == "spam_or_unrelated" and decision.get("confidence", 0) >= 0.8:
         record.detail = "support: ignored as unrelated (" + decision.get("summary_for_officers", "")[:200] + ")"
@@ -196,6 +226,13 @@ def handle_support_email(
                 break
 
     if can_reply:
+        # Second opinion on the draft: no promises of money, no invented logistics, no commitments.
+        guard = decide.guard_reply(reply_text, {"pickup": settings.gbm_info, "shipping": "none", "refunds_and_exchanges": "decided by officers only, never promised", "codes": "never expire, one use each"})
+        if guard is not None and guard.flags:
+            can_reply = False
+            decision["summary_for_officers"] = f"guardrail flagged: {', '.join(guard.flags)}; escalated. " + decision.get("summary_for_officers", "")
+
+    if can_reply:
         footer = f"\n\n(You are talking to the {settings.org_name} Merch Desk, an automated assistant. Reply again and an officer will see it.)"
         try:
             client.reply(record.message_id, text=reply_text + footer, labels=["auto-reply", decision.get("category", "other")])
@@ -207,9 +244,14 @@ def handle_support_email(
             record.detail = f"support reply failed: {exc}"
 
     # Escalate: forward to the org with the model's summary (or a plain note).
-    why = "throttled: too many auto-replies on this thread" if throttled else (
-        f"{decision.get('category')}: {decision.get('summary_for_officers')}" if decision else "no model decision (no key or call failed)"
-    )
+    if throttled:
+        why = "throttled: too many auto-replies on this thread"
+    elif jev_escalate:
+        why = f"jev: {triage.escalate_reason} ({triage.summary()})"
+    elif decision:
+        why = f"{decision.get('category')}: {decision.get('summary_for_officers')}"
+    else:
+        why = "no model decision (no key or call failed)"
     record.detail = (record.detail + "; " if record.detail else "") + f"escalated to {settings.org_email} ({why[:300]})"
     if client:
         try:

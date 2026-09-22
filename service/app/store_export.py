@@ -29,6 +29,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from . import decide
 from .config import settings
 from .db import Order
 from .orders import DuplicateOrder, create_order, resolve_buyer_email, send_code_email
@@ -226,7 +227,7 @@ def parse_store_export(text: str) -> Tuple[List[ExportOrder], List[Tuple[int, st
 # plan (no writes) and commit
 # --------------------------------------------------------------------------- #
 
-ACTIONS = ("create", "duplicate", "cancel", "not_ordered", "resolve_email")
+ACTIONS = ("create", "duplicate", "cancel", "not_ordered", "resolve_email", "not_merch")
 
 
 @dataclass
@@ -271,7 +272,13 @@ def _awaiting_email_match(session: Session, eo: ExportOrder) -> Optional[Order]:
 
 def plan_store_export(session: Session, orders: List[ExportOrder]) -> List[Planned]:
     plan: List[Planned] = []
+    # One Jev call judges every distinct listing name; rows that are not pickup items get no code.
+    not_merch = decide.classify_items(sorted({i.product_name for eo in orders for i in eo.items}))
     for eo in orders:
+        if eo.items and not_merch and all(not_merch.get(i.product_name, 0.0) >= decide.NOT_MERCH_THRESHOLD for i in eo.items):
+            worst = max(not_merch.get(i.product_name, 0.0) for i in eo.items)
+            plan.append(Planned(eo, "not_merch", None, f"Jev: not a pickup item (p={worst:.2f}); no order created"))
+            continue
         existing = session.scalar(select(Order).where(Order.dedup_hash == eo.key))
         note = ""
         if existing is None:

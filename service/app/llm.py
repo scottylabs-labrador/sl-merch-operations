@@ -58,8 +58,17 @@ def structured_json(
     try:
         extra: Dict[str, Any] = {}
         if _is_openrouter():
-            # Only route to providers that honour response_format, so strict JSON is real.
-            extra["provider"] = {"require_parameters": True}
+            # Only providers that honour response_format (so strict JSON is real), only the
+            # configured providers in order, and only zero-data-retention endpoints that do
+            # not train on prompts.
+            provider: Dict[str, Any] = {"require_parameters": True}
+            if settings.llm_providers:
+                provider["only"] = list(settings.llm_providers)
+                provider["order"] = list(settings.llm_providers)
+            if settings.llm_zdr:
+                provider["zdr"] = True
+                provider["data_collection"] = "deny"
+            extra["provider"] = provider
         response = _client().chat.completions.create(
             model=settings.llm_model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],

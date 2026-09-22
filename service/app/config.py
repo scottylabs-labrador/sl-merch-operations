@@ -88,8 +88,20 @@ class Settings:
     # default so one key covers every model vendor. Empty key = no model calls.
     llm_api_key: str = field(default_factory=lambda: _env("OPENROUTER_API_KEY"))
     llm_base_url: str = field(default_factory=lambda: _env("LLM_BASE_URL", "https://openrouter.ai/api/v1"))
-    llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", "openai/gpt-6-astra"))
+    llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", "z-ai/glm-5.3-flash"))
+    # OpenRouter provider routing: only these providers, tried in this order, and
+    # only their zero-data-retention endpoints that do not train on prompts.
+    llm_providers: List[str] = field(default_factory=lambda: _env_list("LLM_PROVIDERS", "coreweave,fireworks,baseten"))
+    llm_zdr: bool = field(default_factory=lambda: _env("LLM_ZDR", "1").lower() in ("1", "true", "yes"))
     llm_timeout_seconds: float = field(default_factory=lambda: float(_env("LLM_TIMEOUT_SECONDS", "60") or 60))
+
+    # --- Jev (Typesafe System One): typed decisions, never text --------------
+    # Classifies emails, screens replies, and judges export rows with calibrated
+    # probabilities. Empty key = the regex and LLM paths are used instead.
+    typesafe_api_key: str = field(default_factory=lambda: _env("TYPESAFE_API_KEY"))
+    typesafe_model: str = field(default_factory=lambda: _env("TYPESAFE_MODEL", "jev-latest"))
+    typesafe_base_url: str = field(default_factory=lambda: _env("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1"))
+    typesafe_timeout_seconds: float = field(default_factory=lambda: float(_env("TYPESAFE_TIMEOUT_SECONDS", "15") or 15))
 
     # --- Scheduled jobs ------------------------------------------------------
     # Day-of-week (mon..sun) and 24h time (America/New_York) for the "bring
