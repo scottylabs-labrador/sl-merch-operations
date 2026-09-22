@@ -1,13 +1,12 @@
 """Buyer replies to the code email.
 
-With OPENAI_API_KEY set, the reply is classified into a small fixed set of
+With OPENROUTER_API_KEY set, the reply is classified into a small fixed set of
 intents and answered from templates (the model never writes free text to the
 buyer). Anything outside those intents, or any classification failure, is
 forwarded to the org inbox. Without a key, every reply is forwarded.
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional
 
@@ -15,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from .agentmail import AgentMail, AgentMailError
 from .config import settings
+from .llm import structured_json
 from .db import InboundEmail, Order
 from .emails import auto_reply_text
 
@@ -34,37 +34,25 @@ INTENT_SCHEMA = {
 
 
 def classify_intent(text: str) -> Optional[str]:
-    if not settings.openai_api_key:
+    data = structured_json(
+        label="intent classification",
+        system=(
+            "Classify a buyer's reply about picking up club merchandise. Intents: "
+            "code_request (they lost or want their pickup code), "
+            "delegate (they ask whether someone else can pick up), "
+            "cant_make_it (they cannot attend the meeting and ask what to do), "
+            "other (anything else: refunds, size changes, complaints, questions about the product). "
+            "Use 'other' whenever unsure."
+        ),
+        user=text[:6000],
+        schema_name="intent",
+        schema=INTENT_SCHEMA,
+    )
+    if data is None:
         return None
-    try:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=settings.openai_api_key)
-        response = client.responses.create(
-            model=settings.openai_model,
-            input=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Classify a buyer's reply about picking up club merchandise. Intents: "
-                        "code_request (they lost or want their pickup code), "
-                        "delegate (they ask whether someone else can pick up), "
-                        "cant_make_it (they cannot attend the meeting and ask what to do), "
-                        "other (anything else: refunds, size changes, complaints, questions about the product). "
-                        "Use 'other' whenever unsure."
-                    ),
-                },
-                {"role": "user", "content": text[:6000]},
-            ],
-            text={"format": {"type": "json_schema", "name": "intent", "schema": INTENT_SCHEMA, "strict": True}},
-        )
-        data = json.loads(response.output_text)
-        if data.get("confidence", 0) < 0.7:
-            return "other"
-        return data.get("intent") if data.get("intent") in INTENTS else "other"
-    except Exception as exc:
-        log.warning("intent classification failed: %s", exc)
-        return None
+    if data.get("confidence", 0) < 0.7:
+        return "other"
+    return data.get("intent") if data.get("intent") in INTENTS else "other"
 
 
 def handle_buyer_reply(session: Session, record: InboundEmail, order: Order, text: str, client: Optional[AgentMail]) -> None:

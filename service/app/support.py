@@ -14,12 +14,11 @@ Guardrails (all enforced in code, not just in the prompt):
   * At most one auto-reply per thread per 24 hours and three per thread total;
     after that the thread goes to a human.
   * Money, refunds, exchanges, complaints, and low-confidence answers escalate.
-  * Without OPENAI_API_KEY, everything is forwarded to the org inbox.
+  * Without OPENROUTER_API_KEY, everything is forwarded to the org inbox.
 """
 from __future__ import annotations
 
 import datetime as dt
-import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -28,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from .agentmail import AgentMail, AgentMailError
 from .config import settings
+from .llm import structured_json
 from .db import InboundEmail, Order
 
 log = logging.getLogger(__name__)
@@ -127,34 +127,20 @@ def _prior_auto_replies(session: Session, thread_id: Optional[str]) -> List[Inbo
 
 
 def ask_model(context: str, email_text: str, subject: str, from_addr: str) -> Optional[Dict[str, Any]]:
-    """Call OpenAI with structured output. Returns None on any failure."""
-    if not settings.openai_api_key:
-        return None
-    try:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=settings.openai_api_key)
-        response = client.responses.create(
-            model=settings.openai_model,
-            input=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are the automated support desk for a student club's merchandise store. Decide whether to "
-                        "reply, escalate to a human officer, or ignore, and if replying write the reply. Use ONLY the "
-                        "knowledge base and the sender's order context. If the answer needs anything else, escalate. "
-                        "Set confidence between 0 and 1 for how sure you are the reply is correct and complete.\n\n"
-                        + context
-                    ),
-                },
-                {"role": "user", "content": f"From: {from_addr}\nSubject: {subject}\n\n{email_text[:8000]}"},
-            ],
-            text={"format": {"type": "json_schema", "name": "support_decision", "schema": DECISION_SCHEMA, "strict": True}},
-        )
-        return json.loads(response.output_text)
-    except Exception as exc:
-        log.warning("support model call failed: %s", exc)
-        return None
+    """Ask the model for a structured support decision. None when no key is set or on any failure."""
+    return structured_json(
+        label="support model call",
+        system=(
+            "You are the automated support desk for a student club's merchandise store. Decide whether to "
+            "reply, escalate to a human officer, or ignore, and if replying write the reply. Use ONLY the "
+            "knowledge base and the sender's order context. If the answer needs anything else, escalate. "
+            "Set confidence between 0 and 1 for how sure you are the reply is correct and complete.\n\n"
+            + context
+        ),
+        user=f"From: {from_addr}\nSubject: {subject}\n\n{email_text[:8000]}",
+        schema_name="support_decision",
+        schema=DECISION_SCHEMA,
+    )
 
 
 def handle_support_email(

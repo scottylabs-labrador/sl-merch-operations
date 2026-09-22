@@ -77,9 +77,13 @@ class Settings:
     # --- Storage -------------------------------------------------------------
     database_url: str = field(default_factory=lambda: _env("DATABASE_URL", "sqlite:///./merch.db"))
 
-    # --- Optional LLM assist -------------------------------------------------
-    openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY"))
-    openai_model: str = field(default_factory=lambda: _env("OPENAI_MODEL", "gpt-6-astra"))
+    # --- Optional LLM assist (OpenRouter) ------------------------------------
+    # Any OpenAI-compatible Chat Completions endpoint works; OpenRouter is the
+    # default so one key covers every model vendor. Empty key = no model calls.
+    llm_api_key: str = field(default_factory=lambda: _env("OPENROUTER_API_KEY"))
+    llm_base_url: str = field(default_factory=lambda: _env("LLM_BASE_URL", "https://openrouter.ai/api/v1"))
+    llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", "openai/gpt-6-astra"))
+    llm_timeout_seconds: float = field(default_factory=lambda: float(_env("LLM_TIMEOUT_SECONDS", "60") or 60))
 
     # --- Scheduled jobs ------------------------------------------------------
     # Day-of-week (mon..sun) and 24h time (America/New_York) for the "bring

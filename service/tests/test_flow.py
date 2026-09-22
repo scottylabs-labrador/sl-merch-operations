@@ -6,7 +6,7 @@ os.environ["DISABLE_SCHEDULER"] = "1"
 os.environ["AGENTMAIL_WEBHOOK_SECRET"] = ""
 os.environ["VOLUNTEER_PASSCODE"] = "vol"
 os.environ["ADMIN_PASSCODE"] = "adm"
-os.environ["OPENAI_API_KEY"] = ""
+os.environ["OPENROUTER_API_KEY"] = ""
 os.environ["AGENTMAIL_API_KEY"] = ""
 os.environ["SCOTTYLABS_MERCH_AGENTMAIL_API_TOKEN"] = ""
 
@@ -176,7 +176,7 @@ def test_support_agent_replies_with_own_code_only(client, monkeypatch):
         return {"action": "reply", "category": "lost_code", "reply_text": f"Your pickup code is {code}.", "summary_for_officers": "lost code", "confidence": 0.95}
 
     monkeypatch.setattr(support_mod, "ask_model", fake_model)
-    monkeypatch.setattr(support_mod.settings, "openai_api_key", "x")
+    monkeypatch.setattr(support_mod.settings, "llm_api_key", "x")
     msg = {"message_id": "<q1@buyer>", "thread_id": "thr-q1", "from": "jqtartan@example.invalid", "subject": "lost my code", "text": "what was my code?", "timestamp": "2026-09-09T10:00:00Z"}
     r = client.post("/webhooks/agentmail", json={"type": "event", "event_type": "message.received", "event_id": "evt-q1", "message": msg, "thread": {}})
     assert r.json()["classification"] == "support" and r.json()["detail"].startswith("auto-replied")
@@ -317,7 +317,7 @@ def test_officer_reply_reaches_support_agent(client, monkeypatch):
     client.post("/webhooks/agentmail", json=_event("evt-rr", receipt, "You successfully purchased from the ScottyLabs Merch Store", "TartanConnect <tartanconnect@andrew.cmu.edu>"))
     code = client.fake.sent[0]["subject"].split(": ")[-1]
     monkeypatch.setattr(support_mod, "ask_model", lambda *a, **k: {"action": "reply", "category": "delegate", "reply_text": f"Yes, a friend can pick it up with code {code}.", "summary_for_officers": "", "confidence": 0.9})
-    monkeypatch.setattr(support_mod.settings, "openai_api_key", "x")
+    monkeypatch.setattr(support_mod.settings, "llm_api_key", "x")
     # The officer (a trusted sender because of Gmail forwarding) replies to the code email.
     msg = {"message_id": "<re1@tk>", "thread_id": "thread-1", "from": "Jane Tartan <jtartan@example.invalid>", "subject": "Re: Your ScottyLabs pickup code", "text": "Can my roommate pick it up?", "timestamp": "2026-09-07T03:40:00Z"}
     r = client.post("/webhooks/agentmail", json={"type": "event", "event_type": "message.received", "event_id": "evt-re1", "message": msg, "thread": {}})
