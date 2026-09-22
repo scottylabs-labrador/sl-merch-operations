@@ -25,11 +25,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from . import decide
+from .checkout_answer import CheckoutAnswer, merge_answers
+from .consent import latest_revocation
 from .config import settings
 from .db import Order
 from .orders import DuplicateOrder, create_order, resolve_buyer_email, send_code_email
@@ -166,15 +168,21 @@ class ExportOrder:
 
     @property
     def key(self) -> str:
+        # Items are identified by size (falling back to the name), so renaming a listing
+        # never makes past checkouts look new on the next upload.
         payload = {
             "email": self.buyer_email,
             "at": self.purchased_at.astimezone(dt.timezone.utc).isoformat(timespec="seconds"),
-            "items": sorted((i.product_name.strip().lower(), i.quantity) for i in self.items),
+            "items": sorted((_item_identity(i.size, i.product_name), i.quantity) for i in self.items),
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
     def summary(self) -> str:
         return ", ".join(f"{i.quantity}× {i.product_name}" + (f" [{i.size}]" if i.size else "") for i in self.items)
+
+    @property
+    def answer(self) -> CheckoutAnswer:
+        return merge_answers(self.comments)
 
 
 def parse_store_export(text: str) -> Tuple[List[ExportOrder], List[Tuple[int, str]]]:
@@ -238,9 +246,13 @@ class Planned:
     note: str = ""
 
 
+def _item_identity(size: Optional[str], name: str) -> str:
+    return ("size:" + size.upper()) if size else ("name:" + re.sub(r"\s+", " ", name.strip().lower()))
+
+
 def _same_items(a: ExportOrder, b: Order) -> bool:
-    left = sorted((i.product_name.strip().lower(), i.quantity) for i in a.items)
-    right = sorted((i.product_name.strip().lower(), i.quantity) for i in b.items)
+    left = sorted((_item_identity(i.size, i.product_name), i.quantity) for i in a.items)
+    right = sorted((_item_identity(i.size, i.product_name), i.quantity) for i in b.items)
     return left == right
 
 
@@ -313,9 +325,63 @@ class UploadResult:
     resolved: int = 0
 
 
+def _utc(value: Optional[dt.datetime]) -> Optional[dt.datetime]:
+    if value is None:
+        return None
+    return value.replace(tzinfo=dt.timezone.utc) if value.tzinfo is None else value.astimezone(dt.timezone.utc)
+
+
+def _consent_effective_from() -> dt.datetime:
+    try:
+        return dt.datetime.fromisoformat(settings.consent_prompt_effective_from.replace("Z", "+00:00")).astimezone(dt.timezone.utc)
+    except ValueError:
+        return dt.datetime.max.replace(tzinfo=dt.timezone.utc)  # misconfigured: never grant consent
+
+
+def apply_answer(session: Session, order: Order, eo: ExportOrder, overwrite: bool = False) -> None:
+    """Store what the buyer typed at checkout, and what we read from it, on the order.
+
+    Call/text consent is granted only when the parser's allowlist says yes, the purchase
+    happened after the disclosure went live, and the buyer has not opted out since.
+    """
+    if not eo.comments or (order.checkout_answer and not overwrite):
+        return
+    ans = eo.answer
+    notes = list(ans.notes)
+    order.checkout_answer = ans.raw[:2000]
+    order.contact_email = ans.cmu_email  # only a CMU address counts; a non-CMU one stays in the raw answer
+    order.contact_phone = ans.phone
+    order.terms_agreed = ans.agreed
+    consent = ans.calls_opt_in
+    if consent and _utc(eo.purchased_at) < _consent_effective_from():
+        consent = False
+        notes.append("purchased before the call/text disclosure went live: no consent")
+    revoked = latest_revocation(session, [eo.buyer_email, ans.cmu_email], ans.phone)
+    if revoked is not None and revoked >= _utc(eo.purchased_at):
+        consent = False
+        order.calls_opt_out_at = order.calls_opt_out_at or revoked
+        notes.append("buyer opted out of calls/texts after this purchase: no consent")
+    if order.calls_opt_out_at is not None:
+        consent = False
+    order.calls_opt_in = consent
+    if notes:
+        order.notes = ((order.notes + "; ") if order.notes else "") + "; ".join(notes)[:1500]
+
+
 def commit_store_export(session: Session, plan: List[Planned], send_email: bool) -> UploadResult:
     result = UploadResult()
     for p in plan:
+        try:
+            _commit_one(session, p, send_email, result)
+        except SQLAlchemyError as exc:  # one bad row (e.g. a value too long for its column) never stops the rest
+            session.rollback()
+            log.warning("store export row for %s skipped: %s", p.order.buyer_email, exc)
+            result.skipped += 1
+    return result
+
+
+def _commit_one(session: Session, p: "Planned", send_email: bool, result: "UploadResult") -> None:
+    if True:
         eo = p.order
         if p.action == "create":
             parsed = ParsedOrder(
@@ -332,7 +398,12 @@ def commit_store_export(session: Session, plan: List[Planned], send_email: bool)
                 order = create_order(session, parsed, purchased_at=eo.purchased_at)
             except DuplicateOrder:
                 result.duplicates += 1
-                continue
+                return
+            if eo.comments:
+                apply_answer(session, order, eo)
+            else:
+                order.checkout_answer = ""  # blank box: record that nothing was typed
+            session.commit()
             result.created.append(order)
             if send_email:
                 if send_code_email(session, order):
@@ -355,13 +426,14 @@ def commit_store_export(session: Session, plan: List[Planned], send_email: bool)
             result.resolved += 1
         elif p.action == "duplicate":
             result.duplicates += 1
-            # An order created another way: adopt the export identity so later uploads match exactly.
-            if p.existing is not None and p.existing.dedup_hash != eo.key:
-                p.existing.dedup_hash = eo.key
+            if p.existing is not None:
+                apply_answer(session, p.existing, eo)  # fills in orders that predate the answer; never overwrites
+                # An order created another way: adopt the export identity so later uploads match exactly.
+                if p.existing.dedup_hash != eo.key:
+                    p.existing.dedup_hash = eo.key
                 try:
                     session.commit()
                 except IntegrityError:
                     session.rollback()
         else:
             result.skipped += 1
-    return result

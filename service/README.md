@@ -1,8 +1,8 @@
 # ScottyLabs Merch Pickup Service
 
 Turns every TartanConnect store purchase into a unique pickup code, emails it to
-the buyer, and gives GBM volunteers a phone page to verify codes and record
-handoffs. The only human work is bringing shirts to the GBM and tapping
+the buyer, and gives pickup-table volunteers a phone page to verify codes and record
+handoffs. The only human work is bringing shirts to the Saturday pickup and tapping
 "Confirm handed over".
 
 ## How it works
@@ -15,7 +15,7 @@ flowchart LR
     D --> E[Service on Sheltie<br/>group rows → order → code SL-XXXX-XXXX]
     E --> F[Email buyer: code + QR + pickup rules]
     E --> G[(Postgres)]
-    H[Volunteer at GBM<br/>/pickup page] --> G
+    H[Volunteer at Saturday pickup<br/>/pickup page] --> G
     F -. buyer replies .-> W[AgentMail inbox webhook]
     W --> I[Auto-reply for code / delegate / can't-make-it<br/>everything else forwarded to scottylabs@cmu.edu]
     J[Tuesday 09:00 cron] --> K[Bring list by size → scottylabs@cmu.edu]
@@ -45,7 +45,7 @@ flowchart LR
    TartanConnect reference, and a buyer+items+minute hash.
 4. **Buyer email.** Sent from `ScottyLabs Merch <scottylabs-merch@agentmail.to>`
    with the code in the subject, an inline QR, the item list, and the rules:
-   pickup only at the weekly GBM, no shipping, a friend may present the code,
+   pickup only at the Saturday session in Tepper 3808, no shipping, no refunds, a friend may present the code,
    each code works once.
 5. **Pickup.** Volunteers open `/pickup` (shared passcode), type or scan the
    code, see the buyer and items, enter their own name (and the delegate's if
@@ -55,7 +55,7 @@ flowchart LR
    is classified into `code_request` / `delegate` / `cant_make_it` and answered
    from fixed templates (the model never free-writes to buyers); anything else,
    or no key, is forwarded to scottylabs@cmu.edu.
-7. **Bring list.** Every Tuesday 09:00 (configurable) the org gets "bring N of
+7. **Bring list.** Every Saturday 10:00 (configurable) the org gets "bring N of
    each size" for all unpicked orders. `/admin` shows the same live.
 8. **Reconcile.** Same page, same upload: the latest export always brings the
    database back in line with the store.
@@ -125,7 +125,7 @@ service runs there as project **merch-operations** with a managed Postgres.
 | `TRUSTED_SENDERS` | platform sender plus the officer whose Gmail forwards (email intake only) |
 | `EMAIL_ORDER_INTAKE` | `0` (default). `1` also creates orders from emailed notifications and receipts |
 | `EXPORT_IGNORE_ITEMS` | `donation` by default; export rows whose item contains this are not merch |
-| `GBM_INFO` | one sentence with day/time/room, shown in every buyer email |
+| `PICKUP_INFO` | where and when pickup happens, shown in every buyer email and used by the support desk (default: Saturdays 4-5 PM, Tepper 3808). `GBM_INFO` is still read as the old name |
 
 3. **Deploy**, then register the webhook against the new URL and store its secret:
 

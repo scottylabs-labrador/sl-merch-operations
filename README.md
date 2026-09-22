@@ -3,9 +3,10 @@
 Merch logistics for ScottyLabs, Carnegie Mellon's student-run software organization.
 This repository holds the assets and the automation behind the ScottyLabs Merch Store
 on TartanConnect (CMU's CampusGroups instance): an at-cost store where every purchase
-turns into a one-time pickup code, buyers collect at the weekly general body meeting
-(GBM), and volunteers verify codes from a phone. The only human work is bringing shirts
-to the GBM and tapping "Confirm handed over".
+turns into a one-time pickup code, buyers collect in person at the ScottyLabs
+Worksession (Saturdays 4-5 PM, Tepper 3808), and volunteers verify codes from a phone.
+Nothing ships and all sales are final. The only human work is bringing shirts to the
+pickup and tapping "Confirm handed over".
 
 ## What is in this repo
 
@@ -46,7 +47,8 @@ then a review queue with an alert to the org. Nothing is dropped silently.
 **Pickup codes.** Each order gets a unique code such as `SL-7K3Q-9RT2`, drawn from an
 alphabet without 0, O, 1, I, L, or U so it can be read aloud at a noisy table. The
 buyer receives it by email with an inline QR image and the rules: pickup only at the
-GBM, no shipping, a friend may present the code, each code works once.
+Saturday session, no shipping, no refunds, a friend may present the code, each code
+works once.
 
 **Buyer email resolution (email intake only).** The store export always carries the
 buyer's email. Only the officer notification omits it, so with email intake on an order

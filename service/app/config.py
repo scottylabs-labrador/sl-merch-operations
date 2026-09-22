@@ -1,7 +1,7 @@
 """Runtime configuration, all from environment variables.
 
 Every knob the org might need to change lives here so nobody has to edit code
-to move the GBM, rename the inbox, or rotate a passcode.
+to move pickup, rename the inbox, or rotate a passcode.
 """
 from __future__ import annotations
 
@@ -67,12 +67,21 @@ class Settings:
     # --- Org / pickup logistics ---------------------------------------------
     org_email: str = field(default_factory=lambda: _env("ORG_EMAIL", "scottylabs@cmu.edu"))
     org_name: str = field(default_factory=lambda: _env("ORG_NAME", "ScottyLabs"))
-    gbm_info: str = field(
-        default_factory=lambda: _env(
-            "GBM_INFO",
-            "our weekly ScottyLabs GBM (general body meeting). Times and rooms are posted at https://scottylabs.org and https://luma.com/scottylabs.",
+    # Where and when buyers collect merch. Every buyer email and the support desk use it.
+    # GBM_INFO is the old name of this setting and is still read.
+    pickup_info: str = field(
+        default_factory=lambda: _env("PICKUP_INFO")
+        or _env("GBM_INFO")
+        or (
+            "the ScottyLabs Worksession in Tepper 3808 (the Oval Room), 3rd floor of the Tepper School of Business building, "
+            "across from the Swartz Center, on Saturdays from 4:00 to 5:00 PM. Dates, times and the room "
+            "can change at ScottyLabs' discretion; any change is announced by email."
         )
     )
+    price_text: str = field(default_factory=lambda: _env("PRICE_TEXT", "$10.40 (sold at cost; the price covers the shirt plus card fees)"))
+    # Call/text consent only counts for purchases made after the checkout prompt that
+    # carries the disclosure went live (docs/checkout-prompt-log.md, version 1).
+    consent_prompt_effective_from: str = field(default_factory=lambda: _env("CONSENT_PROMPT_EFFECTIVE_FROM", "2026-09-22T18:55:00Z"))
     public_base_url: str = field(default_factory=lambda: _env("PUBLIC_BASE_URL", "http://localhost:8000"))
 
     # --- Access control ------------------------------------------------------
@@ -121,8 +130,8 @@ class Settings:
     # --- Scheduled jobs ------------------------------------------------------
     # Day-of-week (mon..sun) and 24h time (America/New_York) for the "bring
     # these sizes" email to the org. Empty string disables it.
-    bring_list_day: str = field(default_factory=lambda: _env("BRING_LIST_DAY", "tue"))
-    bring_list_time: str = field(default_factory=lambda: _env("BRING_LIST_TIME", "09:00"))
+    bring_list_day: str = field(default_factory=lambda: _env("BRING_LIST_DAY", "sat"))
+    bring_list_time: str = field(default_factory=lambda: _env("BRING_LIST_TIME", "10:00"))
     timezone: str = field(default_factory=lambda: _env("TIMEZONE", "America/New_York"))
     # Inbox polling backstop (seconds between polls; 0 disables) and how far back to look.
     poll_interval_seconds: int = field(default_factory=lambda: int(_env("POLL_INTERVAL_SECONDS", "60") or 0))
