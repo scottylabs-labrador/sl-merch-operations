@@ -40,7 +40,7 @@
 
   <div class="grid">
     <div class="card">
-      <h3>Bring to the next GBM</h3>
+      <h3>Bring to the next Saturday pickup</h3>
       {% if bring %}
       <table><tr><th>Size</th><th>Unpicked</th><th>Orders</th></tr>
       {% for size, qty, n in bring %}<tr><td>{{ size or '–' }}</td><td>{{ qty }}</td><td>{{ n }}</td></tr>{% endfor %}
@@ -60,6 +60,25 @@
         <input name="email" type="email" placeholder="buyer@andrew.cmu.edu" required> <button>Save & send code</button>
       </form>
       {% else %}<p>None.</p>{% endfor %}
+    </div>
+
+    <div class="card">
+      <h3>Incomplete checkout answers ({{ incomplete|length }})</h3>
+      <p><small>Buyers were asked to type YES, their CMU email and phone number at checkout; TartanConnect cannot force it. Email these buyers to confirm the pickup terms and get the missing details. Their pickup code was still sent.</small></p>
+      {% for o in incomplete %}
+      <div style="margin:6px 0"><code>{{ o.pickup_code }}</code> {{ o.buyer_name }} · <a href="mailto:{{ o.buyer_email }}">{{ o.buyer_email }}</a><br><small class="error">missing: {{ o.answer_missing|join(', ') }}</small>{% if o.checkout_answer %} <small>typed: "{{ o.checkout_answer }}"</small>{% endif %}
+        <form method="post" action="/admin/orders/{{ o.id }}/answer" style="margin-top:4px"><input name="details" placeholder="what the buyer sent: YES, email, phone" required style="width:260px"> <button class="grey">Record</button></form>
+        <small>Recording details never turns on calls/texts; only CALLS OK typed at checkout does.</small></div>
+      {% else %}<p>None.</p>{% endfor %}
+    </div>
+
+    <div class="card">
+      <h3>Record a call/text opt-out</h3>
+      <p><small>Buyers may opt out any way: an email to scottylabs@cmu.edu, a text STOP, or saying stop on a call. Record it here right away (the legal limit is 10 business days). It applies to every order with that email or phone, and to orders uploaded later.</small></p>
+      <form method="post" action="/admin/calls-opt-out">
+        <input name="email" type="email" placeholder="buyer email"> <input name="phone" placeholder="phone"><br>
+        <input name="note" placeholder="how it was received (optional)" style="width:260px;margin-top:4px"> <button>Record opt-out</button>
+      </form>
     </div>
 
     <div class="card">
@@ -84,7 +103,7 @@
         <td>{{ o.id }}</td>
         <td><code>{{ o.pickup_code }}</code></td>
         <td><span class="status {{ o.status }}">{{ o.status.replace('_',' ') }}</span></td>
-        <td>{{ o.buyer_name }}<br><small>{{ o.buyer_email }}</small></td>
+        <td>{{ o.buyer_name }}<br><small>{{ o.buyer_email }}</small>{% if o.contact_email and o.contact_email != o.buyer_email %}<br><small>CMU: {{ o.contact_email }}</small>{% endif %}{% if o.contact_phone %}<br><small>{{ o.contact_phone }}{% if o.calls_opt_in %} · calls/texts OK{% endif %}</small>{% endif %}{% if o.answer_missing %}<br><small class="error">answer missing: {{ o.answer_missing|join(', ') }}</small>{% endif %}</td>
         <td>{{ o.summary() }}</td>
         <td>{{ o.quantity_picked }}/{{ o.quantity_total }}{% if o.pickups %}<br><small>{{ o.pickups[-1].picked_up_at.strftime('%b %d %H:%M') }} · {{ o.pickups[-1].volunteer }}</small>{% endif %}</td>
         <td>{{ o.purchased_at.strftime('%b %d %H:%M') if o.purchased_at else '' }}</td>

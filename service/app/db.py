@@ -15,6 +15,8 @@ from typing import Generator, List, Optional
 from sqlalchemy import (
     JSON,
     Boolean,
+    inspect,
+    text,
     DateTime,
     ForeignKey,
     Integer,
@@ -70,10 +72,33 @@ class Order(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
+    # What the buyer typed into TartanConnect's checkout box, and what we read from it
+    # (see app/checkout_answer.py). The raw text is the record of their consent.
+    checkout_answer: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    contact_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    terms_agreed: Mapped[bool] = mapped_column(Boolean, default=False)
+    calls_opt_in: Mapped[bool] = mapped_column(Boolean, default=False)
+    calls_opt_out_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     items: Mapped[List["OrderItem"]] = relationship(
         back_populates="order", cascade="all, delete-orphan", order_by="OrderItem.id"
     )
     pickups: Mapped[List["Pickup"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+
+    @property
+    def answer_missing(self) -> List[str]:
+        """What the checkout answer lacked; empty for orders that predate the answer."""
+        if self.parse_source != "store_export" or self.checkout_answer is None:
+            return []
+        out = []
+        if not self.terms_agreed:
+            out.append("YES agreement")
+        if not self.contact_email:
+            out.append("CMU email")
+        if not self.contact_phone:
+            out.append("phone number")
+        return out
 
     @property
     def quantity_total(self) -> int:
@@ -85,6 +110,38 @@ class Order(Base):
 
     def summary(self) -> str:
         return ", ".join(f"{i.quantity} x {i.label}" for i in self.items)
+
+
+class ExportUpload(Base):
+    """Every store export an officer commits, byte for byte: the record of what buyers typed and agreed to."""
+
+    __tablename__ = "export_uploads"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    uploaded_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    filename: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    sha256: Mapped[str] = mapped_column(String(64), index=True)  # of the raw bytes, matches `sha256sum export.csv`
+    content_b64: Mapped[str] = mapped_column(Text)  # raw bytes, base64 (text-safe on Postgres, NULs included)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class CallOptOut(Base):
+    """A revocation of call/text consent, kept independent of orders.
+
+    Recorded from buyer emails, the support triage, or an officer on /admin, even when no
+    order matches yet, so an export uploaded later cannot bring consent back.
+    """
+
+    __tablename__ = "call_opt_outs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True, index=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    revoked_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(64))  # email | triage | officer
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    inbound_email_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class OrderItem(Base):
@@ -145,8 +202,28 @@ engine = create_engine(
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
+# Columns added after the first deploy. create_all() never alters an existing table,
+# so add any that are missing (works on Postgres and SQLite).
+_ADDED_ORDER_COLUMNS = {
+    "checkout_answer": "TEXT",
+    "contact_email": "VARCHAR(320)",
+    "contact_phone": "VARCHAR(32)",
+    "terms_agreed": "BOOLEAN NOT NULL DEFAULT FALSE",
+    "calls_opt_in": "BOOLEAN NOT NULL DEFAULT FALSE",
+    "calls_opt_out_at": "TIMESTAMP WITH TIME ZONE",
+}
+
+
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    have = {c["name"] for c in inspect(engine).get_columns("orders")}
+    missing = {k: v for k, v in _ADDED_ORDER_COLUMNS.items() if k not in have}
+    if missing:
+        with engine.begin() as conn:
+            for name, ddl in missing.items():
+                if engine.dialect.name == "sqlite":
+                    ddl = ddl.replace("TIMESTAMP WITH TIME ZONE", "DATETIME")
+                conn.execute(text(f"ALTER TABLE orders ADD COLUMN {name} {ddl}"))
 
 
 def get_session() -> Generator[Session, None, None]:

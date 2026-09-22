@@ -13,7 +13,7 @@
   table{border-collapse:collapse;width:100%;font-size:14px}
   th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #eee;vertical-align:top}
   .tag{font-weight:700;padding:2px 8px;border-radius:6px;font-size:12px;white-space:nowrap}
-  .create{background:#d9f2e3;color:#155a2e}.duplicate{background:#eee;color:#555}.cancel{background:#ffe0e0;color:#7a0b1c}.not_ordered{background:#fff3cd;color:#7a5a00}.resolve_email{background:#e3ecfa;color:#1d3f7a}.not_merch{background:#fff3cd;color:#7a5a00}
+  .create{background:#d9f2e3;color:#155a2e}.duplicate{background:#eee;color:#555}.cancel{background:#ffe0e0;color:#7a0b1c}.not_ordered{background:#fff3cd;color:#7a5a00}.resolve_email{background:#e3ecfa;color:#1d3f7a}.missing{color:#7a0b1c;font-weight:600}.not_merch{background:#fff3cd;color:#7a5a00}
   button{padding:8px 14px;border:0;border-radius:6px;background:#b8102b;color:#fff;font-size:15px}
   button.grey{background:#ddd;color:#111}
   .summary{display:flex;gap:18px;flex-wrap:wrap;font-size:15px}
@@ -41,6 +41,7 @@
   <div class="card">
     <form method="post" action="/admin/upload/commit">
       <input type="hidden" name="csv_b64" value="{{ csv_b64 }}">
+      <input type="hidden" name="filename" value="{{ filename }}">
       <label><input type="checkbox" name="send_email" value="yes" checked> email pickup codes to the {{ counts.get('create', 0) }} new buyers</label>
       <p>
         <button {% if not counts.get('create') and not counts.get('cancel') and not counts.get('resolve_email') %}disabled{% endif %}>Apply: create {{ counts.get('create', 0) }}, cancel {{ counts.get('cancel', 0) }}{% if counts.get('resolve_email') %}, fill in {{ counts.get('resolve_email') }} email(s){% endif %}</button>
@@ -51,7 +52,7 @@
 
   <div class="card">
     <table>
-      <tr><th>Action</th><th>Buyer</th><th>Items</th><th>Ordered</th><th>Total</th><th>Note</th></tr>
+      <tr><th>Action</th><th>Buyer</th><th>Items</th><th>Ordered</th><th>Total</th><th>Checkout answer</th><th>Note</th></tr>
       {% for p in plan %}
       <tr>
         <td><span class="tag {{ p.action }}">{{ p.action.replace('_', ' ') }}</span></td>
@@ -59,7 +60,9 @@
         <td>{{ p.order.summary() }}</td>
         <td>{{ p.order.purchased_at.strftime('%b %d %Y %H:%M UTC') }}</td>
         <td>${{ '%.2f' % (p.order.total_cents / 100) }}</td>
-        <td><small>{{ p.note }}{% if p.order.comments %} · comments: {{ p.order.comments|join(' / ') }}{% endif %}</small></td>
+        {% set a = p.order.answer %}
+        <td><small>{% if a.raw %}{{ a.summary() }}{% if a.missing %}<br><span class="missing">missing: {{ a.missing|join(', ') }}</span>{% endif %}<br><em>"{{ a.raw }}"</em>{% else %}<span class="missing">left blank</span>{% endif %}</small></td>
+        <td><small>{{ p.note }}</small></td>
       </tr>
       {% endfor %}
     </table>

@@ -228,11 +228,12 @@ def admin_page(request: Request, role: str = Depends(require_role("admin")), ses
     orders = session.scalars(select(Order).order_by(Order.purchased_at.desc()).limit(500)).all()
     rows, pending = unpicked_by_size(session)
     awaiting = [o for o in orders if o.status == "needs_email"]
+    incomplete = [o for o in orders if o.answer_missing and o.status in ("pending", "needs_email")]
     recent = session.scalars(select(InboundEmail).order_by(InboundEmail.received_at.desc()).limit(50)).all()
     return templates.TemplateResponse(
         request,
         "admin.html",
-        {"orders": orders, "bring": rows, "pending": pending, "awaiting": awaiting, "recent": recent, "org": settings.org_name, "inbox": settings.agentmail_inbox_id},
+        {"orders": orders, "bring": rows, "pending": pending, "awaiting": awaiting, "incomplete": incomplete, "recent": recent, "org": settings.org_name, "inbox": settings.agentmail_inbox_id},
     )
 
 
@@ -252,10 +253,10 @@ def set_buyer_email(order_id: int, email: str = Form(...), role: str = Depends(r
 def orders_csv(role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(["order_id", "pickup_code", "status", "buyer_name", "buyer_email", "items", "qty_total", "qty_picked", "total_usd", "purchased_at", "tc_reference", "code_email_sent_at", "last_pickup_at", "last_volunteer", "notes"])
+    w.writerow(["order_id", "pickup_code", "status", "buyer_name", "buyer_email", "contact_email", "contact_phone", "terms_agreed", "calls_opt_in", "calls_opt_out_at", "checkout_answer", "items", "qty_total", "qty_picked", "total_usd", "purchased_at", "tc_reference", "code_email_sent_at", "last_pickup_at", "last_volunteer", "notes"])
     for o in session.scalars(select(Order).order_by(Order.purchased_at)).all():
         last = o.pickups[-1] if o.pickups else None
-        w.writerow([o.id, o.pickup_code, o.status, o.buyer_name, o.buyer_email, o.summary(), o.quantity_total, o.quantity_picked, f"{o.total_cents/100:.2f}", o.purchased_at.isoformat() if o.purchased_at else "", o.tc_reference or "", o.code_email_sent_at.isoformat() if o.code_email_sent_at else "", last.picked_up_at.isoformat() if last else "", last.volunteer if last else "", o.notes or ""])
+        w.writerow([o.id, o.pickup_code, o.status, o.buyer_name, o.buyer_email, o.contact_email or "", o.contact_phone or "", "yes" if o.terms_agreed else "no", "yes" if o.calls_opt_in else "no", o.calls_opt_out_at.isoformat() if o.calls_opt_out_at else "", o.checkout_answer or "", o.summary(), o.quantity_total, o.quantity_picked, f"{o.total_cents/100:.2f}", o.purchased_at.isoformat() if o.purchased_at else "", o.tc_reference or "", o.code_email_sent_at.isoformat() if o.code_email_sent_at else "", last.picked_up_at.isoformat() if last else "", last.volunteer if last else "", o.notes or ""])
     return Response(out.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=merch-orders.csv"})
 
 
@@ -312,7 +313,7 @@ async def upload_preview(request: Request, file: UploadFile = File(...), role: s
     """Step 1 of the store-export upload: parse, plan, show what would happen. Writes nothing."""
     raw = await file.read()
     try:
-        orders, skipped = parse_store_export(raw.decode("utf-8-sig", errors="replace"))
+        orders, skipped = parse_store_export(raw.decode("utf-8-sig", errors="replace").replace("\x00", ""))
     except ExportFormatError as exc:
         return RedirectResponse(f"/admin?flash=upload-rejected-{re.sub(r'[^A-Za-z0-9 ,;:._-]', '', str(exc))[:200]}", status_code=303)
     plan = plan_store_export(session, orders)
@@ -331,19 +332,66 @@ async def upload_preview(request: Request, file: UploadFile = File(...), role: s
 
 
 @app.post("/admin/upload/commit")
-def upload_commit(csv_b64: str = Form(...), send_email: str = Form("no"), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+def upload_commit(csv_b64: str = Form(...), send_email: str = Form("no"), filename: str = Form(""), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
     """Step 2: re-parse the same file, re-plan against the current database, apply."""
     try:
-        text = base64.b64decode(csv_b64).decode("utf-8-sig", errors="replace")
-        orders, skipped = parse_store_export(text)
+        raw = base64.b64decode(csv_b64, validate=True)
+        orders, skipped = parse_store_export(raw.decode("utf-8-sig", errors="replace").replace("\x00", ""))
     except (ValueError, ExportFormatError) as exc:
         return RedirectResponse(f"/admin?flash=upload-rejected-{re.sub(r'[^A-Za-z0-9 ,;:._-]', '', str(exc))[:200]}", status_code=303)
     plan = plan_store_export(session, orders)
+    import hashlib
+
+    from .db import ExportUpload
+
+    session.add(ExportUpload(filename=filename[:300] or None, sha256=hashlib.sha256(raw).hexdigest(), content_b64=base64.b64encode(raw).decode()))
+    session.commit()
     result = commit_store_export(session, plan, send_email == "yes")
     return RedirectResponse(
         f"/admin?flash=upload-created-{len(result.created)}-emailed-{result.emailed}-cancelled-{result.cancelled}-duplicates-{result.duplicates}-resolved-{result.resolved}-skipped-{result.skipped + len(skipped)}",
         status_code=303,
     )
+
+
+@app.post("/admin/calls-opt-out")
+def admin_calls_opt_out(email: str = Form(""), phone: str = Form(""), note: str = Form(""), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    """An officer records a call/text opt-out received any other way (scottylabs@cmu.edu, a call, a text reply)."""
+    from .consent import phone_in, record_opt_out
+
+    normalized_phone = phone_in(phone) if phone.strip() else None
+    if phone.strip() and not normalized_phone:
+        normalized_phone = re.sub(r"[^\d+]", "", phone)[:32] or None
+    if not email.strip() and not normalized_phone:
+        return RedirectResponse("/admin?flash=opt-out-needs-an-email-or-phone", status_code=303)
+    changed = record_opt_out(session, email=email, phone=normalized_phone, source="officer", note=note)
+    return RedirectResponse(f"/admin?flash=opt-out-recorded-{changed}-order(s)-updated", status_code=303)
+
+
+@app.post("/admin/orders/{order_id}/answer")
+def admin_record_answer(order_id: int, details: str = Form(...), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    """An officer records missing checkout details the buyer sent later. Never grants call/text consent."""
+    from .checkout_answer import parse_checkout_answer
+
+    order = session.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="order not found")
+    ans = parse_checkout_answer(details)
+    filled = []
+    if ans.cmu_email and not order.contact_email:
+        order.contact_email = ans.cmu_email
+        filled.append("CMU email")
+    if ans.phone and not order.contact_phone:
+        order.contact_phone = ans.phone
+        filled.append("phone")
+    if ans.agreed and not order.terms_agreed:
+        order.terms_agreed = True
+        filled.append("YES agreement")
+    if order.checkout_answer is None:
+        order.checkout_answer = ""
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    order.notes = ((order.notes + "; ") if order.notes else "") + f"officer recorded {', '.join(filled) or 'nothing new'} on {stamp} from: {details.strip()[:300]}"
+    session.commit()
+    return RedirectResponse(f"/admin?flash=recorded-{'-'.join(filled) or 'nothing-new'}-for-{order.pickup_code}", status_code=303)
 
 
 @app.post("/admin/bring-list")

@@ -2,7 +2,7 @@
 
 Codes look like  SL-7K3Q-9RT2 : a fixed prefix plus 8 characters from the
 Crockford base32 alphabet (no 0/O, 1/I/L, or U), so they are unambiguous when
-read aloud at a noisy GBM or scribbled on a phone. Randomness comes from
+read aloud at a noisy pickup table or scribbled on a phone. Randomness comes from
 `secrets`; uniqueness is enforced by the database's unique index, with the
 caller retrying on collision (2^40 space, so collisions are essentially
 never seen at this volume).

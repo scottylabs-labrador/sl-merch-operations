@@ -11,10 +11,12 @@ from .db import Order
 def _rules_text() -> str:
     return (
         f"How pickup works\n"
-        f"- Pickup only, no shipping. Merch is handed out in person at {settings.gbm_info}\n"
+        f"- Pickup only. We never ship, mail or deliver merch. Pick it up in person at {settings.pickup_info}\n"
         f"- Show this code (or the QR image) to the volunteer at the merch table.\n"
         f"- Can't make it? Send a friend with the code. Whoever presents it gets the order.\n"
         f"- Each code works once. Once the order is handed over, the code is used up.\n"
+        f"- All sales are final: no refunds.\n"
+        f"- Watch this inbox: pickup changes are announced by email.\n"
         f"- Keep your TartanConnect receipt as backup proof of purchase.\n"
     )
 
@@ -23,10 +25,12 @@ def _rules_html() -> str:
     return (
         "<h3 style='margin:24px 0 8px'>How pickup works</h3>"
         "<ul style='line-height:1.5'>"
-        f"<li><strong>Pickup only, no shipping.</strong> Merch is handed out in person at {html.escape(settings.gbm_info)}</li>"
+        f"<li><strong>Pickup only.</strong> We never ship, mail or deliver merch. Pick it up in person at {html.escape(settings.pickup_info)}</li>"
         "<li>Show this code (or the QR image) to the volunteer at the merch table.</li>"
         "<li>Can't make it? Send a friend with the code. Whoever presents it gets the order.</li>"
         "<li><strong>Each code works once.</strong> Once the order is handed over, the code is used up.</li>"
+        "<li><strong>All sales are final:</strong> no refunds.</li>"
+        "<li>Watch this inbox: pickup changes are announced by email.</li>"
         "<li>Keep your TartanConnect receipt as backup proof of purchase.</li>"
         "</ul>"
     )
@@ -66,7 +70,7 @@ def bring_list_email(rows: Iterable[Tuple[str, int, int]], pending_orders: int, 
     """rows: (size, unpicked_quantity, orders) -> (subject, text)."""
     rows = list(rows)
     lines = [f"  {size or 'no size':>8}: {qty:>3} shirts across {orders} orders" for size, qty, orders in rows]
-    subject = f"[{settings.org_name} merch] Bring list for this week's GBM: {sum(r[1] for r in rows)} items, {pending_orders} orders"
+    subject = f"[{settings.org_name} merch] Bring list for today's pickup: {sum(r[1] for r in rows)} items, {pending_orders} orders"
     text = (
         "Unpicked orders by size (bring at least this many of each):\n\n"
         + ("\n".join(lines) if lines else "  nothing pending")
@@ -76,8 +80,7 @@ def bring_list_email(rows: Iterable[Tuple[str, int, int]], pending_orders: int, 
     if awaiting_email:
         text += (
             f"\n{awaiting_email} order(s) have a code but no buyer email yet (TartanConnect's officer notification omits it). "
-            f"To send their codes: Store > Sales > Generate Report, then upload the CSV at {settings.public_base_url}/admin. "
-            "Buyers can also forward their TartanConnect receipt to the merch inbox to get the code instantly.\n"
+            f"To send their codes: download the store export from TartanConnect, then upload it at {settings.public_base_url}/admin.\n"
         )
     return subject, text
 
@@ -105,7 +108,7 @@ def auto_reply_text(order: Order, intent: str) -> str:
         )
     elif intent == "cant_make_it":
         base += (
-            "No problem. Codes do not expire, so bring it to any upcoming GBM, or send a friend with it.\n\n"
+            "No problem. Codes do not expire, so bring it to any later Saturday pickup session, or send a friend with it.\n\n"
         )
-    base += f"Pickup is in person only at {settings.gbm_info}\n\n{settings.org_name}\n"
+    base += f"Pickup is in person only, at {settings.pickup_info} We never ship merch, and all sales are final.\n\n{settings.org_name}\n"
     return base
