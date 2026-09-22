@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from .agentmail import AgentMail, AgentMailError
 from .config import settings
+from . import decide
 from .llm import structured_json
 from .db import InboundEmail, Order
 from .emails import auto_reply_text
@@ -34,6 +35,12 @@ INTENT_SCHEMA = {
 
 
 def classify_intent(text: str) -> Optional[str]:
+    jev = decide.classify_intent(text)
+    if jev is not None:
+        intent, confidence = jev
+        if confidence < 0.7 or intent not in INTENTS:
+            return "other"
+        return intent
     data = structured_json(
         label="intent classification",
         system=(

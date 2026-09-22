@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .agentmail import AgentMail, AgentMailError
+from . import decide
 from .config import settings
 from .db import InboundEmail, Order
 from .emails import review_alert_email
@@ -102,9 +103,13 @@ def handle_event(session: Session, payload: Dict[str, Any], client: Optional[Age
     text = _message_text(msg, client)
 
     try:
-        if from_addr in settings.trusted_senders and re.search(r"refund", subject, re.IGNORECASE):
+        trusted = from_addr in settings.trusted_senders
+        kind = decide.classify_notification(text, subject) if trusted else None
+        is_refund = bool(re.search(r"refund", subject, re.IGNORECASE)) or (kind or {}).get("refund", 0.0) >= decide.NOTIFICATION_THRESHOLD
+        is_purchase = is_purchase_notification(subject, text) or (kind or {}).get("purchase", 0.0) >= decide.NOTIFICATION_THRESHOLD
+        if trusted and is_refund:
             _handle_refund(session, record, text, client)
-        elif from_addr in settings.trusted_senders and is_purchase_notification(subject, text):
+        elif trusted and is_purchase:
             if settings.email_order_intake:
                 _handle_purchase(session, record, msg, text, client)
             else:
