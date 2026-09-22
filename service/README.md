@@ -137,6 +137,15 @@ python3 scripts/register_webhook.py https://merch.sheltie.scottylabs.org/webhook
 Pushes to `main` redeploy automatically once the GitHub App is connected; until
 then, use **Redeploy** in Sheltie or `coolify deploy` from the CLI.
 
+## Red-teaming the support desk
+
+`python scripts/redteam.py` (with `OPENROUTER_API_KEY` set) runs 42 emails, good,
+awkward and hostile, through the real Jev + LLM pipeline against a throwaway
+SQLite database with a stub mailer, and prints what every stage decided plus
+hard checks: no other buyer's code, no third-party email, no internal markers in
+any reply. Run it after changing prompts, thresholds in `app/decide.py`, or the
+model, and read the replies, not just the counts.
+
 ## Gmail forwarding (one-time, done by the merch officer in Gmail's UI)
 
 1. Gmail → Settings → Forwarding and POP/IMAP → Add a forwarding address →

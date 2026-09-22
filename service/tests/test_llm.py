@@ -63,6 +63,7 @@ def test_structured_call_shape_and_parsing(monkeypatch):
     prov = body["provider"]
     assert prov["require_parameters"] is True and prov["zdr"] is True and prov["data_collection"] == "deny"
     assert prov["only"] == ["coreweave", "fireworks", "baseten"] and prov["order"] == prov["only"]
+    assert body["max_tokens"] == 4096 and body["reasoning"] == {"effort": "low"}
 
 
 def test_provider_failure_degrades_to_none(monkeypatch):

@@ -19,6 +19,9 @@ from .config import settings
 
 log = logging.getLogger(__name__)
 
+# Token accounting of the most recent call, for logs and the red-team harness.
+LAST_USAGE: Dict[str, Any] = {}
+
 
 def llm_enabled() -> bool:
     return bool(settings.llm_api_key)
@@ -69,6 +72,8 @@ def structured_json(
                 provider["zdr"] = True
                 provider["data_collection"] = "deny"
             extra["provider"] = provider
+            if settings.llm_reasoning_effort:
+                extra["reasoning"] = {"effort": settings.llm_reasoning_effort}
         response = _client().chat.completions.create(
             model=settings.llm_model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -76,9 +81,25 @@ def structured_json(
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "schema": schema, "strict": True},
             },
+            max_tokens=settings.llm_max_tokens,
             extra_body=extra or None,
         )
-        content = response.choices[0].message.content or ""
+        choice = response.choices[0]
+        usage = getattr(response, "usage", None)
+        details = getattr(usage, "completion_tokens_details", None) if usage else None
+        LAST_USAGE.clear()
+        LAST_USAGE.update({
+            "prompt_tokens": getattr(usage, "prompt_tokens", None) if usage else None,
+            "completion_tokens": getattr(usage, "completion_tokens", None) if usage else None,
+            "reasoning_tokens": getattr(details, "reasoning_tokens", None) if details else None,
+            "finish_reason": choice.finish_reason,
+            "provider": getattr(response, "provider", None),
+        })
+        log.info("%s: %s", label, LAST_USAGE)
+        if choice.finish_reason == "length":
+            log.warning("%s: output truncated at %s tokens (raise LLM_MAX_TOKENS)", label, settings.llm_max_tokens)
+            return None
+        content = choice.message.content or ""
         return json.loads(content)
     except Exception as exc:  # noqa: BLE001 - any failure degrades to "no model help"
         log.warning("%s failed: %s", label, exc)
