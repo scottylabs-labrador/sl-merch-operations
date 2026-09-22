@@ -97,11 +97,22 @@ class Settings:
 
     # --- Jev (Typesafe System One): typed decisions, never text --------------
     # Classifies emails, screens replies, and judges export rows with calibrated
-    # probabilities. Empty key = the regex and LLM paths are used instead.
-    typesafe_api_key: str = field(default_factory=lambda: _env("TYPESAFE_API_KEY"))
-    typesafe_model: str = field(default_factory=lambda: _env("TYPESAFE_MODEL", "jev-latest"))
-    typesafe_base_url: str = field(default_factory=lambda: _env("TYPESAFE_BASE_URL", "https://api.typesafe.ai/v1"))
-    typesafe_timeout_seconds: float = field(default_factory=lambda: float(_env("TYPESAFE_TIMEOUT_SECONDS", "15") or 15))
+    # probabilities. Served through OpenRouter's decisions endpoint with the
+    # OpenRouter key by default; point JEV_URL at Typesafe's own API
+    # (https://api.typesafe.ai/v1/systemone) with JEV_API_KEY to go direct.
+    # JEV_ENABLED=0 or no key = the regex and LLM paths are used instead.
+    jev_enabled: bool = field(default_factory=lambda: _env("JEV_ENABLED", "1").lower() in ("1", "true", "yes"))
+    jev_url: str = field(default_factory=lambda: _env("JEV_URL", "https://openrouter.ai/api/alpha/decisions"))
+    jev_model: str = field(default_factory=lambda: _env("JEV_MODEL", "typesafe/jev-1.13"))
+    jev_api_key: str = field(default_factory=lambda: _env("JEV_API_KEY") or _env("TYPESAFE_API_KEY"))
+    jev_timeout_seconds: float = field(default_factory=lambda: float(_env("JEV_TIMEOUT_SECONDS", "15") or 15))
+
+    @property
+    def jev_key(self) -> str:
+        """The key to send: an explicit Jev key, else the OpenRouter key when Jev goes through OpenRouter."""
+        if self.jev_api_key:
+            return self.jev_api_key
+        return self.llm_api_key if "openrouter.ai" in self.jev_url else ""
 
     # --- Scheduled jobs ------------------------------------------------------
     # Day-of-week (mon..sun) and 24h time (America/New_York) for the "bring

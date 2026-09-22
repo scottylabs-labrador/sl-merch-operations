@@ -121,7 +121,7 @@ service runs there as project **merch-operations** with a managed Postgres.
 | `LLM_MODEL` | `z-ai/glm-5.3-flash` by default. Any OpenRouter model that supports structured outputs works |
 | `LLM_PROVIDERS` | `coreweave,fireworks,baseten` by default. OpenRouter provider slugs, tried in order; requests never leave this set |
 | `LLM_ZDR` | `1` by default: only zero-data-retention endpoints that do not train on prompts |
-| `TYPESAFE_API_KEY` | optional, enables Jev: calibrated triage of support mail, templated answers without the LLM, a guardrail on every LLM-written reply, and merch/not-merch judgement on export rows |
+| `JEV_ENABLED` | `1` by default. Jev (Typesafe's decision model, `typesafe/jev-1.13` through OpenRouter with the same key) does calibrated triage of support mail, templated answers without the LLM, a guardrail on every LLM-written reply, and merch/not-merch judgement on export rows. `JEV_URL` + `JEV_API_KEY` switch it to Typesafe's own API |
 | `TRUSTED_SENDERS` | platform sender plus the officer whose Gmail forwards (email intake only) |
 | `EMAIL_ORDER_INTAKE` | `0` (default). `1` also creates orders from emailed notifications and receipts |
 | `EXPORT_IGNORE_ITEMS` | `donation` by default; export rows whose item contains this are not merch |

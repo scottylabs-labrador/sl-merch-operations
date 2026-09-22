@@ -44,8 +44,8 @@ def fake_jev(monkeypatch, answers):
             out[qid] = {"type": q["type"], **a}
         return httpx.Response(200, json={"model": "jev-1.13.0", "answers": out, "usage": {"input_tokens": 12, "output_tokens": 0}})
 
-    monkeypatch.setattr(settings, "typesafe_api_key", "test-key")
-    monkeypatch.setattr(decide, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.typesafe.ai/v1"))
+    monkeypatch.setattr(settings, "jev_api_key", "test-key")
+    monkeypatch.setattr(decide, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
     return calls
 
 
@@ -65,7 +65,8 @@ def _support_event(from_addr, subject, text, event_id="evt-s"):
 
 
 def test_without_key_nothing_is_asked(monkeypatch):
-    monkeypatch.setattr(settings, "typesafe_api_key", "")
+    monkeypatch.setattr(settings, "jev_api_key", "")
+    monkeypatch.setattr(settings, "llm_api_key", "")
     monkeypatch.setattr(decide, "_client", lambda: (_ for _ in ()).throw(AssertionError("no client without a key")))
     assert decide.classify_intent("hi") is None
     assert decide.triage_email("hi", "s", "a@b.c") is None
@@ -74,10 +75,25 @@ def test_without_key_nothing_is_asked(monkeypatch):
 
 def test_request_shape_and_auth(monkeypatch):
     calls = fake_jev(monkeypatch, {"intent": {"choice": "delegate", "probabilities": {"delegate": 0.95}, "confidence": 0.93}})
-    assert decide.classify_intent("can my roommate grab it?") == ("delegate", 0.93)
+    assert decide.classify_intent("can my roommate grab it?") == ("delegate", 0.95)
     body = calls[0]
-    assert body["model"] == "jev-latest" and body["questions"]["intent"]["type"] == "choice"
+    assert body["model"] == "typesafe/jev-1.13" and body["questions"]["intent"]["type"] == "choice"
+    assert body["provider"] == {"zdr": True, "data_collection": "deny"}
     assert set(body["questions"]["intent"]["criteria"]) == {"code_request", "delegate", "cant_make_it", "other"}
+
+
+def test_openrouter_key_is_used_when_no_jev_key(monkeypatch):
+    monkeypatch.setattr(settings, "jev_api_key", "")
+    monkeypatch.setattr(settings, "llm_api_key", "or-key")
+    assert settings.jev_key == "or-key" and decide.enabled()
+    monkeypatch.setattr(settings, "jev_enabled", False)
+    assert not decide.enabled()
+
+
+def test_choice_gates_on_chosen_probability_not_peakedness(monkeypatch):
+    # A 0.76 vote for delegate against a catch-all: clear enough to act, even with a soft distribution.
+    fake_jev(monkeypatch, {"intent": {"choice": "delegate", "probabilities": {"delegate": 0.76, "other": 0.23, "code_request": 0.0, "cant_make_it": 0.01}, "confidence": 0.68}})
+    assert responder_mod.classify_intent("can my roommate grab my shirt on tuesday?") == "delegate"
 
 
 def test_reply_intent_uses_jev_not_llm(monkeypatch):

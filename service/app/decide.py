@@ -8,8 +8,15 @@ holds every judgement call in the service: what an email wants, whether it is
 safe to send a reply, whether an export row is merch. Text generation stays
 with the LLM in app/llm.py.
 
-Everything here returns None without TYPESAFE_API_KEY (or on any failure), so
-the regex and LLM paths remain the fallback and the service keeps working.
+Jev is reached through OpenRouter's decisions endpoint (model
+``typesafe/jev-1.13``) with the OpenRouter key by default, or through
+Typesafe's own API when JEV_URL/JEV_API_KEY say so. Everything here returns
+None when Jev is disabled, unconfigured, or failing, so the regex and LLM
+paths remain the fallback and the service keeps working.
+
+Choice answers are gated on the probability of the chosen option, not on
+Typesafe's peakedness "confidence": a 0.76 vote for one intent against a
+catch-all "other" is a clear read even when the distribution is not sharp.
 """
 from __future__ import annotations
 
@@ -35,7 +42,11 @@ NOTIFICATION_THRESHOLD = 0.80  # trusted-sender email is a refund / purchase not
 
 
 def enabled() -> bool:
-    return bool(settings.typesafe_api_key)
+    return settings.jev_enabled and bool(settings.jev_key)
+
+
+def _via_openrouter() -> bool:
+    return "openrouter.ai" in settings.jev_url
 
 
 def noul(instructions: str, criteria: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
@@ -54,20 +65,23 @@ def score(instructions: str, criteria: List[str]) -> Dict[str, Any]:
 
 
 def _client() -> httpx.Client:
-    return httpx.Client(
-        base_url=settings.typesafe_base_url,
-        headers={"Authorization": f"Bearer {settings.typesafe_api_key}"},
-        timeout=settings.typesafe_timeout_seconds,
-    )
+    headers = {"Authorization": f"Bearer {settings.jev_key}"}
+    if _via_openrouter():
+        headers.update({"HTTP-Referer": settings.public_base_url, "X-Title": f"{settings.org_name} Merch Desk"})
+    return httpx.Client(headers=headers, timeout=settings.jev_timeout_seconds)
 
 
 def ask(*, label: str, state: Any, questions: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Dict[str, Any]]]:
     """One System One request. Returns the answers keyed by question id, or None."""
     if not enabled():
         return None
+    payload: Dict[str, Any] = {"model": settings.jev_model, "state": state, "questions": questions}
+    if _via_openrouter():
+        # Same data policy as the LLM calls: zero retention, no training on prompts.
+        payload["provider"] = {"zdr": True, "data_collection": "deny"}
     try:
         with _client() as client:
-            r = client.post("/systemone", json={"model": settings.typesafe_model, "state": state, "questions": questions})
+            r = client.post(settings.jev_url, json=payload)
             r.raise_for_status()
             body = r.json()
         answers = body.get("answers") or {}
@@ -76,7 +90,7 @@ def ask(*, label: str, state: Any, questions: Dict[str, Dict[str, Any]]) -> Opti
             log.warning("%s (jev): missing answers %s", label, missing)
             return None
         usage = body.get("usage") or {}
-        log.info("%s (jev %s): %d questions, %s input tokens", label, body.get("model", "?"), len(questions), usage.get("input_tokens", "?"))
+        log.info("%s (jev %s via %s): %d questions, %s input tokens, cost %s", label, body.get("model", "?"), body.get("provider", "direct"), len(questions), usage.get("input_tokens", "?"), usage.get("cost", "?"))
         return answers
     except Exception as exc:  # noqa: BLE001 - any failure degrades to the non-Jev path
         log.warning("%s (jev) failed: %s", label, exc)
@@ -88,6 +102,17 @@ def _p(answer: Dict[str, Any], key: str = "noul") -> float:
         return float(answer.get(key) or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _chosen(answer: Dict[str, Any]) -> Tuple[str, float]:
+    """(choice, probability of that choice) for a choice answer."""
+    choice_key = str(answer.get("choice") or "other")
+    probs = answer.get("probabilities") or {}
+    try:
+        p = float(probs.get(choice_key, answer.get("confidence") or 0.0))
+    except (TypeError, ValueError):
+        p = 0.0
+    return choice_key, p
 
 
 # --------------------------------------------------------------------------- #
@@ -107,8 +132,7 @@ def classify_intent(text: str) -> Optional[Tuple[str, float]]:
     answers = ask(label="reply intent", state=text[:6000], questions={"intent": choice("What does the buyer want?", INTENT_CRITERIA)})
     if not answers:
         return None
-    a = answers["intent"]
-    return str(a.get("choice") or "other"), _p(a, "confidence")
+    return _chosen(answers["intent"])
 
 
 # --------------------------------------------------------------------------- #
@@ -181,8 +205,8 @@ def triage_email(text: str, subject: str, from_addr: str) -> Optional[Triage]:
         refund_or_money=_p(answers["refund_or_money"]),
         about_others_order=_p(answers["about_others_order"]),
         complaint=_p(answers["complaint"]),
-        category=str(answers["category"].get("choice") or "other"),
-        category_confidence=_p(answers["category"], "confidence"),
+        category=_chosen(answers["category"])[0],
+        category_confidence=_chosen(answers["category"])[1],
         frustration=_p(answers["frustration"], "score"),
     )
 
