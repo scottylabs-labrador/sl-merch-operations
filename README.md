@@ -137,6 +137,10 @@ same notification and the same code flow.
 * Model output is schema validated and cross-checked against the source text. The model
   never composes free text to a buyer without the guardrails above, and every LLM reply is
   screened by a second, calibrated model before it is sent.
+* Hostile mail (prompt injection, impersonated officers, requests for other people's codes)
+  is recognised by Jev before any LLM runs and goes to an officer; a reply on someone
+  else's code thread from another address is escalated by a hard rule with no model at all.
+  `service/scripts/redteam.py` replays 42 such emails against the live models.
 * LLM calls go only to the configured OpenRouter providers and only to their
   zero-data-retention endpoints that do not train on prompts.
 * Passcodes are compared in constant time and sessions are signed cookies.

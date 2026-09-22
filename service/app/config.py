@@ -94,6 +94,10 @@ class Settings:
     llm_providers: List[str] = field(default_factory=lambda: _env_list("LLM_PROVIDERS", "coreweave,fireworks,baseten"))
     llm_zdr: bool = field(default_factory=lambda: _env("LLM_ZDR", "1").lower() in ("1", "true", "yes"))
     llm_timeout_seconds: float = field(default_factory=lambda: float(_env("LLM_TIMEOUT_SECONDS", "60") or 60))
+    # Bound every call so adversarial prompts cannot make the model think for 20-45 s. The cap
+    # covers reasoning AND the answer, so it must leave ample room for a full reply.
+    llm_max_tokens: int = field(default_factory=lambda: int(_env("LLM_MAX_TOKENS", "4096") or 4096))
+    llm_reasoning_effort: str = field(default_factory=lambda: _env("LLM_REASONING_EFFORT", "low"))
 
     # --- Jev (Typesafe System One): typed decisions, never text --------------
     # Classifies emails, screens replies, and judges export rows with calibrated
