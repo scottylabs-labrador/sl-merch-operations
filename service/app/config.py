@@ -43,6 +43,12 @@ class Settings:
     from_display_name: str = field(default_factory=lambda: _env("FROM_DISPLAY_NAME", "ScottyLabs Merch"))
 
     # --- Order intake --------------------------------------------------------
+    # Orders come from the store export an officer uploads on /admin. Creating
+    # orders from emails (officer notifications, buyer-forwarded receipts) is
+    # off by default because forwarded receipts can be faked.
+    email_order_intake: bool = field(default_factory=lambda: _env("EMAIL_ORDER_INTAKE", "0").lower() in ("1", "true", "yes"))
+    # Export rows whose item name contains any of these (case-insensitive) are not merch.
+    export_ignore_items: List[str] = field(default_factory=lambda: _env_list("EXPORT_IGNORE_ITEMS", "donation"))
     # Only emails whose From address is in this list are treated as purchase
     # notifications. tartanconnect@andrew.cmu.edu is the platform sender; the
     # others cover Gmail auto-forwarding from an officer or the org account.
