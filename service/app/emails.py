@@ -96,7 +96,7 @@ def review_alert_email(subject: str, from_addr: str, reason: str, excerpt: str) 
     return subj, text
 
 
-def auto_reply_text(order: Order, intent: str) -> str:
+def auto_reply_text(order: Order, intent: str, notice: str = "") -> str:
     base = (
         f"Hi {order.buyer_name.split(' ')[0] if order.buyer_name else 'there'},\n\n"
         f"Your pickup code is {order.pickup_code} (order: {order.summary()}).\n\n"
@@ -110,5 +110,8 @@ def auto_reply_text(order: Order, intent: str) -> str:
         base += (
             "No problem. Codes do not expire, so bring it to any later Saturday pickup session, or send a friend with it.\n\n"
         )
-    base += f"Pickup is in person only, at {settings.pickup_info} We never ship merch, and all sales are final.\n\n{settings.org_name}\n"
+    base += f"Pickup is in person only, at {settings.pickup_info} We never ship merch, and all sales are final.\n\n"
+    if notice:
+        base += f"Please note: {notice}\n\n"
+    base += f"{settings.org_name}\n"
     return base

@@ -176,6 +176,70 @@ class Pickup(Base):
     order: Mapped[Order] = relationship(back_populates="pickups")
 
 
+class CustomerUpdate(Base):
+    """An officer's email to buyers: drafted by the model as one template, approved on /admin/updates, then sent
+    to each order with that buyer's own details filled in (see app/updates.py)."""
+
+    __tablename__ = "customer_updates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    instruction: Mapped[str] = mapped_column(Text)                 # what the officer asked for
+    audience: Mapped[str] = mapped_column(String(16))              # pending | order
+    order_id: Mapped[Optional[int]] = mapped_column(ForeignKey("orders.id", ondelete="SET NULL"), nullable=True)
+    subject: Mapped[str] = mapped_column(String(300), default="")  # templates with {placeholders}
+    body: Mapped[str] = mapped_column(Text, default="")
+    format_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)   # the model's one-line description
+    assumptions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)   # one per line
+    desk_notice: Mapped[Optional[str]] = mapped_column(Text, nullable=True)   # proposed support-desk notice
+    desk_notice_until: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    # draft | sending | sent | partial | discarded
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    history: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)      # [{who, text, at}] the officer/agent exchange
+    warnings: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)     # advisory checks on the current revision
+    sent_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    messages: Mapped[List["CustomerUpdateMessage"]] = relationship(
+        back_populates="update", cascade="all, delete-orphan", order_by="CustomerUpdateMessage.id"
+    )
+
+
+class CustomerUpdateMessage(Base):
+    """One recipient of an update: exactly the text the officer previewed, and what happened when it was sent."""
+
+    __tablename__ = "customer_update_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    update_id: Mapped[int] = mapped_column(ForeignKey("customer_updates.id", ondelete="CASCADE"), index=True)
+    order_id: Mapped[Optional[int]] = mapped_column(ForeignKey("orders.id", ondelete="SET NULL"), nullable=True, index=True)
+    to_email: Mapped[str] = mapped_column(String(320), default="")
+    subject: Mapped[str] = mapped_column(String(300), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    # preview | skipped | sent | failed
+    status: Mapped[str] = mapped_column(String(16), default="preview")
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)          # why skipped, or the send error
+    message_id: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    thread_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    sent_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    update: Mapped[CustomerUpdate] = relationship(back_populates="messages")
+    order: Mapped[Optional[Order]] = relationship()
+
+
+class DeskNotice(Base):
+    """Something the automated support desk must tell buyers while it is current (a cancelled or moved pickup)."""
+
+    __tablename__ = "desk_notices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)  # end of that day, local time
+    cleared_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    update_id: Mapped[Optional[int]] = mapped_column(ForeignKey("customer_updates.id", ondelete="SET NULL"), nullable=True)
+
+
 class InboundEmail(Base):
     __tablename__ = "inbound_emails"
 

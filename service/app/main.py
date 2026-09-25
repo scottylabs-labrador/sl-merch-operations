@@ -11,9 +11,9 @@ import io
 import json
 import logging
 import os
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from itsdangerous import BadSignature, URLSafeSerializer
@@ -23,7 +23,8 @@ from sqlalchemy.orm import Session
 from .agentmail import AgentMail, AgentMailError
 from .codes import normalize_code
 from .config import settings
-from .db import InboundEmail, Order, OrderItem, find_order_by_code, get_session, init_db
+from .db import CustomerUpdate, InboundEmail, Order, OrderItem, find_order_by_code, get_session, init_db
+from . import updates as updates_mod
 from .store_export import ExportFormatError, commit_store_export, parse_store_export, plan_store_export
 from .orders import DuplicateOrder, create_order, find_order_by_reference, record_pickup, resolve_buyer_email, send_code_email, unpicked_by_size
 from .parser import ParsedItem, ParsedOrder
@@ -233,7 +234,8 @@ def admin_page(request: Request, role: str = Depends(require_role("admin")), ses
     return templates.TemplateResponse(
         request,
         "admin.html",
-        {"orders": orders, "bring": rows, "pending": pending, "awaiting": awaiting, "incomplete": incomplete, "recent": recent, "org": settings.org_name, "inbox": settings.agentmail_inbox_id},
+        {"orders": orders, "bring": rows, "pending": pending, "awaiting": awaiting, "incomplete": incomplete, "recent": recent, "org": settings.org_name, "inbox": settings.agentmail_inbox_id,
+         "notices": updates_mod.active_notices(session)},
     )
 
 
@@ -433,3 +435,117 @@ def agentmail_status(role: str = Depends(require_role("admin"))) -> JSONResponse
         return JSONResponse({"whoami": client.whoami(), "webhooks": client.list_webhooks()})
     except AgentMailError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
+
+
+# --------------------------------------------------------------------------- #
+# Admin: messages to buyers, drafted by the agent and approved by an officer
+# --------------------------------------------------------------------------- #
+def _flash(url: str, message: str) -> Response:
+    from urllib.parse import quote
+
+    return RedirectResponse(f"{url}?flash={quote(message[:300])}", status_code=303)
+
+
+def _get_update(session: Session, update_id: int) -> CustomerUpdate:
+    upd = session.get(CustomerUpdate, update_id)
+    if not upd:
+        raise HTTPException(status_code=404, detail="update not found")
+    return upd
+
+
+@app.get("/admin/updates", response_class=HTMLResponse)
+def updates_page(request: Request, order_id: Optional[int] = None, role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> HTMLResponse:
+    waiting, skipped = updates_mod.recipients(session, "pending")
+    past = session.scalars(select(CustomerUpdate).where(CustomerUpdate.status != "discarded").order_by(CustomerUpdate.created_at.desc()).limit(50)).all()
+    orders = session.scalars(select(Order).where(Order.buyer_email != "").order_by(Order.purchased_at.desc()).limit(500)).all()
+    return templates.TemplateResponse(
+        request,
+        "updates.html",
+        {"org": settings.org_name, "waiting": waiting, "skipped": skipped, "past": past, "orders": orders, "target": session.get(Order, order_id) if order_id else None,
+         "notices": updates_mod.active_notices(session), "local_day": updates_mod.local_day},
+    )
+
+
+@app.post("/admin/updates")
+def updates_create(instruction: str = Form(...), audience: str = Form("pending"), order_id: Optional[str] = Form(None), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    if not instruction.strip():
+        return _flash("/admin/updates", "Write what buyers should hear first.")
+    oid = int(order_id) if (order_id or "").strip().isdigit() else None
+    if audience == "order" and not (oid and session.get(Order, oid)):
+        return _flash("/admin/updates", "Choose the order to message.")
+    upd = updates_mod.create_update(session, instruction, audience, oid)
+    return RedirectResponse(f"/admin/updates/{upd.id}", status_code=303)
+
+
+@app.get("/admin/updates/{update_id}", response_class=HTMLResponse)
+def update_page(request: Request, update_id: int, role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> HTMLResponse:
+    upd = _get_update(session, update_id)
+    return templates.TemplateResponse(
+        request,
+        "update.html",
+        {"org": settings.org_name, "u": upd, "problems": updates_mod.template_problems(upd.subject, upd.body) if upd.status == "draft" else [],
+         "placeholders": updates_mod.PLACEHOLDERS, "target": session.get(Order, upd.order_id) if upd.order_id else None,
+         "notice_until": updates_mod.local_day(upd.desk_notice_until), "local": lambda d: updates_mod._aware(d).astimezone(updates_mod._tz()) if d else None},
+    )
+
+
+@app.post("/admin/updates/{update_id}/revise")
+def update_revise(update_id: int, feedback: str = Form(...), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    upd = _get_update(session, update_id)
+    if upd.status != "draft":
+        return _flash(f"/admin/updates/{update_id}", "This update was already sent; start a new one.")
+    if feedback.strip():
+        updates_mod.revise_update(session, upd, feedback)
+    return RedirectResponse(f"/admin/updates/{update_id}", status_code=303)
+
+
+@app.post("/admin/updates/{update_id}/edit")
+def update_edit(update_id: int, subject: str = Form(""), body: str = Form(""), desk_notice: str = Form(""), desk_notice_until: str = Form(""), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    upd = _get_update(session, update_id)
+    if upd.status != "draft":
+        return _flash(f"/admin/updates/{update_id}", "This update was already sent; start a new one.")
+    updates_mod.edit_update(session, upd, subject, body, desk_notice, desk_notice_until)
+    return RedirectResponse(f"/admin/updates/{update_id}", status_code=303)
+
+
+@app.post("/admin/updates/{update_id}/send")
+def update_send(update_id: int, background: BackgroundTasks, revision: int = Form(...), include: List[int] = Form(default=[]), notice: str = Form(""), confirm: str = Form(""),
+                role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    upd = _get_update(session, update_id)
+    if confirm != "yes":
+        return _flash(f"/admin/updates/{update_id}", "Tick the box to confirm you read the emails.")
+    ok, why = updates_mod.start_sending(session, upd, revision, set(include), notice == "yes")
+    if not ok:
+        return _flash(f"/admin/updates/{update_id}", f"Not sent: {why.rstrip('.')}.")
+    background.add_task(updates_mod.deliver, upd.id)
+    return RedirectResponse(f"/admin/updates/{update_id}", status_code=303)
+
+
+@app.post("/admin/updates/{update_id}/retry")
+def update_retry(update_id: int, background: BackgroundTasks, role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    upd = _get_update(session, update_id)
+    if updates_mod.retry_failed(session, upd):
+        background.add_task(updates_mod.deliver, upd.id)
+    return RedirectResponse(f"/admin/updates/{update_id}", status_code=303)
+
+
+@app.post("/admin/updates/{update_id}/discard")
+def update_discard(update_id: int, role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    upd = _get_update(session, update_id)
+    if upd.status == "draft":
+        upd.status = "discarded"
+        session.commit()
+    return _flash("/admin/updates", f"Update #{update_id} discarded; nothing was sent.")
+
+
+@app.post("/admin/notices")
+def notice_add(text: str = Form(...), until: str = Form(""), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    updates_mod.add_notice(session, text, until)
+    return _flash("/admin/updates", "The support desk will mention this notice until it expires or you clear it.")
+
+
+@app.post("/admin/notices/{notice_id}/clear")
+def notice_clear(notice_id: int, role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    updates_mod.clear_notice(session, notice_id)
+    return _flash("/admin/updates", "Notice cleared.")
+

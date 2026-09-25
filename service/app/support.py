@@ -67,7 +67,8 @@ SIZE_GUIDE = (
 )
 
 
-def knowledge_base() -> str:
+def knowledge_base(notices: str = "") -> str:
+    """The desk's facts. `notices` are current officer notices (app/updates.py) that override the regular schedule."""
     return f"""
 ORGANIZATION: {settings.org_name} is Carnegie Mellon's student-run software and tech organization (projects, events,
 and hackathons such as TartanHacks). Learn more at https://scottylabs.org. Events, GBMs, and meeting times are posted
@@ -99,7 +100,10 @@ exchange, credit or exception; if asked, state the policy kindly and escalate so
 CALLS AND TEXTS: If someone asks to stop calls or texts, confirm they will not receive them and escalate.
 TONE: Friendly, brief, plain. Two short paragraphs at most. Sign off as "{settings.org_name} Merch Desk (automated)".
 Never invent dates, rooms, prices, stock counts, or policies that are not in this document or the order context.
-"""
+""" + (
+        f"CURRENT NOTICE FROM OFFICERS (overrides the regular pickup schedule above while it is posted; tell buyers when it is relevant): {notices}\n"
+        if notices else ""
+    )
 
 
 def _orders_for_sender(session: Session, email: str) -> List[Order]:
@@ -195,6 +199,9 @@ def handle_support_email(
         session.commit()
         return
 
+    from .updates import notice_text
+
+    notices = notice_text(session)
     orders = _orders_for_sender(session, from_addr)
     if matched_order and matched_order not in orders:
         # A reply on a code thread from an address that did not place the order. No model gets
@@ -225,7 +232,7 @@ def handle_support_email(
         if target is not None:
             intent = decide.TEMPLATE_INTENTS[triage.category]
             try:
-                client.reply(record.message_id, text=auto_reply_text(target, intent), labels=["auto-reply", intent])
+                client.reply(record.message_id, text=auto_reply_text(target, intent, notices), labels=["auto-reply", intent])
                 record.detail = f"{AUTO_REPLY_PREFIX} ({intent}, jev conf {triage.category_confidence:.2f})"
                 session.commit()
                 return
@@ -233,7 +240,7 @@ def handle_support_email(
                 log.error("templated reply failed: %s", exc)
                 record.detail = f"templated reply failed: {exc}"
 
-    context = knowledge_base() + "\nSENDER'S ORDERS:\n" + orders_ctx
+    context = knowledge_base(notices) + "\nSENDER'S ORDERS:\n" + orders_ctx
     if triage is not None:
         context += "\nPRE-CLASSIFICATION (calibrated, from a separate model): " + triage.summary()
     decision = None if (throttled or jev_escalate) else ask_model(context, text, subject, from_addr)
@@ -264,7 +271,7 @@ def handle_support_email(
     guard = None
     if can_reply:
         # Second opinion on the draft: no promises of money, no invented logistics, no commitments.
-        guard = decide.guard_reply(reply_text, {"pickup": settings.pickup_info, "shipping": "none, never", "refunds": "none; all sales final", "exchanges": "never promised", "codes": "never expire, one use each"})
+        guard = decide.guard_reply(reply_text, {"pickup": settings.pickup_info, "current notice": notices or "none", "shipping": "none, never", "refunds": "none; all sales final", "exchanges": "never promised", "codes": "never expire, one use each"})
         if guard is not None and guard.flags:
             can_reply = False
             decision["summary_for_officers"] = f"guardrail flagged: {', '.join(guard.flags)}; escalated. " + decision.get("summary_for_officers", "")
