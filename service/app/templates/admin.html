@@ -29,6 +29,13 @@
 <main>
   {% if request.query_params.get('flash') %}<div class="flash">{{ request.query_params.get('flash') }}</div>{% endif %}
 
+  <div class="card" id="message">
+    <h3>Message buyers</h3>
+    <p><small>Tell the agent what buyers need to hear (a cancelled or moved pickup, anything else). It drafts one email with each buyer's name and order filled in, shows you every copy, and sends only when you approve.</small></p>
+    {% for n in notices %}<p><small><b>Support desk notice:</b> “{{ n.text }}”</small></p>{% endfor %}
+    <a href="/admin/updates"><button>Write an update</button></a>
+  </div>
+
   <div class="card" id="upload">
     <h3>Upload the latest store export</h3>
     <p><small>TartanConnect → Store → Sales → download the orders CSV, then upload it here. You get a preview first. Known orders are skipped, new ones get a pickup code by email, refunded ones are cancelled. Re-uploading the full history is safe.</small></p>
@@ -110,6 +117,7 @@
         <td>{% if o.code_email_sent_at %}sent {{ o.code_email_sent_at.strftime('%b %d %H:%M') }}{% elif o.code_email_error %}<span class="error">failed</span>{% else %}–{% endif %}</td>
         <td>{{ o.parse_source }}{% if o.notes %}<br><small>{{ o.notes }}</small>{% endif %}</td>
         <td>
+          <a href="/admin/updates?order_id={{ o.id }}"><button class="grey">Message</button></a>
           <form class="inline" method="post" action="/admin/orders/{{ o.id }}/resend"><button class="grey">Resend code</button></form>
           <form class="inline" method="post" action="/admin/orders/{{ o.id }}/status">
             <select name="status">{% for s in ['pending','needs_email','picked_up','needs_review','cancelled'] %}<option value="{{ s }}" {% if s == o.status %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>

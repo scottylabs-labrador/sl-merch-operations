@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{% if u.status == 'sending' %}<meta http-equiv="refresh" content="3">{% endif %}
+<title>{{ org }} merch · update #{{ u.id }}</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#f6f6f7;margin:0;color:#111}
+  header{background:#333;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  header a{color:#fff}
+  main{max-width:1100px;margin:0 auto;padding:16px}
+  .card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 2px 10px rgba(0,0,0,.06);margin-bottom:16px;overflow-x:auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+  input,select,textarea{padding:6px;border:1px solid #ccc;border-radius:6px;font:inherit}
+  textarea,input.wide{width:100%;box-sizing:border-box}
+  button{padding:8px 14px;border:0;border-radius:6px;background:#b8102b;color:#fff;font-size:15px}
+  button[disabled]{background:#c9a3aa}
+  button.grey{background:#ddd;color:#111;font-size:14px;padding:6px 10px}
+  .status{font-weight:700;padding:2px 8px;border-radius:6px;font-size:12px}
+  .draft,.preview{background:#fff3cd;color:#7a5a00}.sending{background:#e3ecfa;color:#1d3f7a}.sent{background:#d9f2e3;color:#155a2e}.partial,.failed{background:#ffe0e0;color:#7a0b1c}.skipped,.discarded{background:#eee;color:#555}
+  .flash{background:#e8f0fe;padding:10px;border-radius:8px;margin-bottom:12px}
+  .muted{color:#666}
+  .chat p{margin:6px 0}
+  .who{font-weight:600}
+  .problems{background:#ffe0e0;color:#7a0b1c;padding:8px 12px;border-radius:8px}
+  .warn{background:#fff3cd;color:#5c4400;padding:8px 12px;border-radius:8px}
+  .mail{border:1px solid #e3e3e6;border-radius:10px;padding:12px 14px;margin:10px 0}
+  .mail .to{font-size:14px}
+  .mail .subject{font-weight:600;margin:8px 0 6px}
+  .mail pre{white-space:pre-wrap;font-family:inherit;margin:0;line-height:1.45}
+  code{font-family:Menlo,Consolas,monospace}
+</style>
+</head>
+<body>
+<header><strong>{{ org }} merch admin · update #{{ u.id }}</strong><span><a href="/admin/updates">all updates</a> · <a href="/admin">admin</a> · <a href="/logout">sign out</a></span></header>
+<main>
+  {% if request.query_params.get('flash') %}<div class="flash">{{ request.query_params.get('flash') }}</div>{% endif %}
+  {% set previews = u.messages|selectattr('status', 'equalto', 'preview')|list %}
+  {% set draft = u.status == 'draft' %}
+
+  <div class="card">
+    <h3>Update #{{ u.id }} <span class="status {{ u.status }}">{{ {'draft': 'draft, not sent', 'sending': 'sending…', 'sent': 'sent', 'partial': 'partly sent', 'discarded': 'discarded'}[u.status] }}</span></h3>
+    <p>To: {% if u.audience == 'order' %}one order{% if target %}: #{{ target.id }} {{ target.buyer_name }} · {{ target.summary() }} ({{ target.status.replace('_', ' ') }}){% endif %}{% else %}everyone waiting for pickup{% endif %}</p>
+    <div class="chat">
+      {% for h in u.history or [] %}<p><span class="who">{{ 'You' if h.who == 'officer' else 'Agent' }}:</span> {{ h.text }}</p>{% endfor %}
+    </div>
+    {% if u.assumptions %}<p><b>The agent assumed:</b></p><ul>{% for a in u.assumptions.split('\n') %}<li>{{ a }}</li>{% endfor %}</ul>{% endif %}
+    {% if problems %}<div class="problems"><b>Fix before sending:</b><ul>{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul></div>{% endif %}
+    {% if draft and u.warnings %}<div class="warn" style="margin-top:8px"><b>Worth a second look:</b><ul>{% for w in u.warnings %}<li>{{ w }}</li>{% endfor %}</ul></div>{% endif %}
+  </div>
+
+  {% if draft %}
+  <div class="grid">
+    <div class="card">
+      <h3>Ask for changes</h3>
+      <form method="post" action="/admin/updates/{{ u.id }}/revise">
+        <textarea name="feedback" rows="4" required placeholder="For example: shorter, and say the regular Saturday pickups are 4 to 5 PM in Tepper 3808."></textarea>
+        <p><button class="grey">Redraft</button></p>
+      </form>
+    </div>
+    <div class="card">
+      <h3>Edit it yourself</h3>
+      <form method="post" action="/admin/updates/{{ u.id }}/edit">
+        <p><input class="wide" name="subject" value="{{ u.subject }}" placeholder="Subject"></p>
+        <textarea name="body" rows="12" placeholder="Hi {first_name},">{{ u.body }}</textarea>
+        <p class="muted"><small>Placeholders: {% for k, v in placeholders.items() %}<code>{{ '{' ~ k ~ '}' }}</code> {{ v }}{% if not loop.last %}; {% endif %}{% endfor %}.</small></p>
+        <p><small>Support desk notice (optional):</small><br><textarea name="desk_notice" rows="2">{{ u.desk_notice or '' }}</textarea>
+          <small>until the end of</small> <input type="date" name="desk_notice_until" value="{{ notice_until }}"></p>
+        <p><button class="grey">Save and re-preview</button></p>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    {% if draft %}
+    <h3>Every email, exactly as it will be sent ({{ previews|length }})</h3>
+    {% if u.format_note %}<p class="muted">{{ u.format_note }}</p>{% endif %}
+    <form method="post" action="/admin/updates/{{ u.id }}/send" id="sendform">
+      <input type="hidden" name="revision" value="{{ u.revision }}">
+      {% for m in previews %}
+      <div class="mail">
+        <label class="to"><input type="checkbox" name="include" value="{{ m.id }}" checked> To <b>{{ m.to_email }}</b> · order #{{ m.order_id }}</label>
+        <div class="subject">{{ m.subject }}</div>
+        <pre>{{ m.body }}</pre>
+      </div>
+      {% else %}<p class="muted">Nobody to send this to.</p>{% endfor %}
+      {% if u.desk_notice %}
+      <p><label><input type="checkbox" name="notice" value="yes" checked> Also tell the support desk: “{{ u.desk_notice }}”{% if notice_until %} until the end of {{ notice_until }}{% else %} until you clear it{% endif %}</label></p>
+      {% endif %}
+      <p><label><input type="checkbox" name="confirm" value="yes" required> I've read these emails and they're right to send.</label></p>
+      <p><button id="sendbtn" {% if problems or not previews %}disabled{% endif %}>Send {{ previews|length }} {{ 'email' if previews|length == 1 else 'emails' }}</button></p>
+    </form>
+    <form method="post" action="/admin/updates/{{ u.id }}/discard"><button class="grey">Discard this draft</button></form>
+    {% else %}
+    <h3>Emails ({{ u.messages|rejectattr('status', 'equalto', 'skipped')|list|length }})</h3>
+    {% for m in u.messages if m.status != 'skipped' %}
+    <div class="mail">
+      <div class="to"><span class="status {{ m.status }}">{{ m.status }}</span> To <b>{{ m.to_email }}</b> · order #{{ m.order_id }}{% if m.sent_at %} · {{ local(m.sent_at).strftime('%b %d %I:%M %p') }}{% endif %}{% if m.note %} · <span class="muted">{{ m.note }}</span>{% endif %}</div>
+      <div class="subject">{{ m.subject }}</div>
+      <pre>{{ m.body }}</pre>
+    </div>
+    {% endfor %}
+    {% if u.status == 'partial' %}<form method="post" action="/admin/updates/{{ u.id }}/retry"><button>Retry the failed emails</button></form>{% endif %}
+    {% endif %}
+    {% set left_out = u.messages|selectattr('status', 'equalto', 'skipped')|list %}
+    {% if left_out %}
+    <p class="muted" style="margin-top:14px"><b>Not emailed:</b> {% for m in left_out %}order #{{ m.order_id }}{% if m.to_email %} ({{ m.to_email }}){% endif %}: {{ m.note }}{% if not loop.last %}; {% endif %}{% endfor %}</p>
+    {% endif %}
+  </div>
+</main>
+<script>
+  (function () {
+    var form = document.getElementById('sendform'), btn = document.getElementById('sendbtn');
+    if (!form || !btn || btn.disabled) return;
+    function count() {
+      var n = form.querySelectorAll('input[name=include]:checked').length;
+      btn.textContent = 'Send ' + n + (n === 1 ? ' email' : ' emails');
+      btn.disabled = n === 0;
+    }
+    form.addEventListener('change', count);
+    form.addEventListener('submit', function () { btn.disabled = true; btn.textContent = 'Sending…'; });
+  })();
+</script>
+</body>
+</html>

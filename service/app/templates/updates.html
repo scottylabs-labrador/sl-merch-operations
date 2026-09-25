@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ org }} merch · message buyers</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#f6f6f7;margin:0;color:#111}
+  header{background:#333;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  header a{color:#fff}
+  main{max-width:1100px;margin:0 auto;padding:16px}
+  .card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 2px 10px rgba(0,0,0,.06);margin-bottom:16px;overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:14px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #eee;vertical-align:top}
+  input,select,textarea{padding:6px;border:1px solid #ccc;border-radius:6px;font:inherit}
+  textarea{width:100%;box-sizing:border-box}
+  select{max-width:100%}
+  button{padding:8px 14px;border:0;border-radius:6px;background:#b8102b;color:#fff;font-size:15px}
+  button.grey{background:#ddd;color:#111;font-size:14px;padding:6px 10px}
+  .status{font-weight:700;padding:2px 8px;border-radius:6px;font-size:12px}
+  .draft{background:#fff3cd;color:#7a5a00}.sending{background:#e3ecfa;color:#1d3f7a}.sent{background:#d9f2e3;color:#155a2e}.partial{background:#ffe0e0;color:#7a0b1c}
+  .flash{background:#e8f0fe;padding:10px;border-radius:8px;margin-bottom:12px}
+  .muted{color:#666}
+</style>
+</head>
+<body>
+<header><strong>{{ org }} merch admin · message buyers</strong><span><a href="/admin">back to admin</a> · <a href="/logout">sign out</a></span></header>
+<main>
+  {% if request.query_params.get('flash') %}<div class="flash">{{ request.query_params.get('flash') }}</div>{% endif %}
+
+  <div class="card">
+    <h3>Tell the agent what buyers need to hear</h3>
+    <p class="muted"><small>It drafts one email, fills in each buyer's name and order from the database, and shows you every copy. You can ask for changes or edit it yourself. Nothing is sent until you approve.</small></p>
+    <form method="post" action="/admin/updates">
+      <p>
+        <label><input type="radio" name="audience" value="pending" {% if not target %}checked{% endif %}> Everyone waiting for pickup: <b>{{ waiting|length }}</b> {{ 'order' if waiting|length == 1 else 'orders' }}</label>
+        {% if skipped %}<small class="muted">({{ skipped|length }} more can't be emailed: {% for o, why in skipped %}#{{ o.id }} {{ why }}{% if not loop.last %}; {% endif %}{% endfor %})</small>{% endif %}
+        <br>
+        <label><input type="radio" name="audience" value="order" id="aud-order" {% if target %}checked{% endif %}> One order:</label>
+        <select name="order_id" onchange="document.getElementById('aud-order').checked = !!this.value">
+          <option value="">choose an order…</option>
+          {% for o in orders %}<option value="{{ o.id }}" {% if target and target.id == o.id %}selected{% endif %}>#{{ o.id }} {{ o.buyer_name }} · {{ o.summary() }} · {{ o.status.replace('_', ' ') }}</option>{% endfor %}
+        </select>
+      </p>
+      <textarea name="instruction" rows="5" required placeholder="For example: No pickup at this Saturday's work session. The Saturdays after that are on as usual. We'll hold a makeup pickup on Sunday or early next week and email the time and place."></textarea>
+      <p><button>Draft it</button> <small class="muted">The agent takes a few seconds; you'll see the previews next.</small></p>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>Support desk notices</h3>
+    <p class="muted"><small>While a notice is up, the automated desk tells buyers about it whenever it answers pickup questions, so its replies match what you announced. Sending an update can post one for you.</small></p>
+    {% for n in notices %}
+    <p>“{{ n.text }}” <small class="muted">{% if n.expires_at %}until the end of {{ local_day(n.expires_at) }}{% else %}until you clear it{% endif %}</small>
+      <form method="post" action="/admin/notices/{{ n.id }}/clear" style="display:inline"><button class="grey">Clear</button></form></p>
+    {% else %}<p class="muted">None right now.</p>{% endfor %}
+    <details><summary>Post a notice without emailing anyone</summary>
+      <form method="post" action="/admin/notices" style="margin-top:8px">
+        <textarea name="text" rows="2" required placeholder="No pickup on Saturday, September 26. A makeup pickup will be announced by email."></textarea>
+        <p>Show it until the end of <input type="date" name="until"> <small class="muted">(blank = until you clear it)</small> <button class="grey">Post notice</button></p>
+      </form>
+    </details>
+  </div>
+
+  <div class="card">
+    <h3>Past updates</h3>
+    {% if past %}
+    <table>
+      <tr><th>#</th><th>Started</th><th>To</th><th>Subject</th><th>Status</th><th>Sent</th></tr>
+      {% for u in past %}
+      <tr>
+        <td><a href="/admin/updates/{{ u.id }}">{{ u.id }}</a></td>
+        <td>{{ u.created_at.strftime('%b %d %H:%M') }} UTC</td>
+        <td>{% if u.audience == 'order' %}order #{{ u.order_id }}{% else %}everyone waiting{% endif %}</td>
+        <td><a href="/admin/updates/{{ u.id }}">{{ u.subject or '(no subject yet)' }}</a></td>
+        <td><span class="status {{ u.status }}">{{ u.status }}</span></td>
+        <td>{{ u.messages|selectattr('status', 'equalto', 'sent')|list|length }}{% set failed = u.messages|selectattr('status', 'equalto', 'failed')|list|length %}{% if failed %} <small style="color:#7a0b1c">({{ failed }} failed)</small>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted">None yet.</p>{% endif %}
+  </div>
+</main>
+</body>
+</html>
