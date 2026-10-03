@@ -25,7 +25,7 @@
 </style>
 </head>
 <body>
-<header><strong>{{ org }} merch admin</strong><span><a href="/pickup">pickup page</a> · <a href="/admin/volunteers">volunteer codes</a> · <a href="/admin/orders.csv">export CSV</a> · <a href="/logout">sign out</a></span></header>
+<header><strong>{{ org }} merch admin</strong><span><a href="/pickup">pickup page</a> · <a href="/admin/volunteers">access codes</a> · <a href="/admin/orders.csv">export CSV</a> · <a href="/logout">sign out</a></span></header>
 <main>
   {% if request.query_params.get('flash') %}<div class="flash">{{ request.query_params.get('flash') }}</div>{% endif %}
 
@@ -46,9 +46,9 @@
   </div>
 
   <div class="card" id="volunteers">
-    <h3>Volunteer access codes</h3>
-    <p><small>Give each volunteer their own sign-in code instead of sharing one passcode. Generate a batch before a shift, hand them out, and revoke any code the moment a shift ends or a code leaks — the revoked volunteer is signed out at once, and no one else is affected.</small></p>
-    <a href="/admin/volunteers"><button>Manage volunteer codes</button></a>
+    <h3>Access codes</h3>
+    <p><small>Give each person their own sign-in code instead of sharing a passcode: <b>volunteer</b> codes for the pickup page, <b>admin</b> codes for this admin area. Generate them, hand them out, and revoke any code the moment it should stop working — the holder is signed out at once, and no one else is affected.</small></p>
+    <a href="/admin/volunteers"><button>Manage access codes</button></a>
   </div>
 
   <div class="grid">

@@ -191,6 +191,7 @@ class VolunteerCode(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    role: Mapped[str] = mapped_column(String(16), default="volunteer", index=True)  # volunteer | admin
     label: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)  # who/what it's for
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -305,17 +306,28 @@ _ADDED_ORDER_COLUMNS = {
     "calls_opt_out_at": "TIMESTAMP WITH TIME ZONE",
 }
 
+# volunteer_codes gained a role column after it first shipped; existing rows
+# default to the volunteer role.
+_ADDED_VOLUNTEER_CODE_COLUMNS = {
+    "role": "VARCHAR(16) NOT NULL DEFAULT 'volunteer'",
+}
+
+
+def _add_missing_columns(conn, table: str, columns: dict) -> None:
+    have = {c["name"] for c in inspect(engine).get_columns(table)}
+    for name, ddl in columns.items():
+        if name in have:
+            continue
+        if engine.dialect.name == "sqlite":
+            ddl = ddl.replace("TIMESTAMP WITH TIME ZONE", "DATETIME")
+        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
 
 def init_db() -> None:
     Base.metadata.create_all(engine)
-    have = {c["name"] for c in inspect(engine).get_columns("orders")}
-    missing = {k: v for k, v in _ADDED_ORDER_COLUMNS.items() if k not in have}
-    if missing:
-        with engine.begin() as conn:
-            for name, ddl in missing.items():
-                if engine.dialect.name == "sqlite":
-                    ddl = ddl.replace("TIMESTAMP WITH TIME ZONE", "DATETIME")
-                conn.execute(text(f"ALTER TABLE orders ADD COLUMN {name} {ddl}"))
+    with engine.begin() as conn:
+        _add_missing_columns(conn, "orders", _ADDED_ORDER_COLUMNS)
+        _add_missing_columns(conn, "volunteer_codes", _ADDED_VOLUNTEER_CODE_COLUMNS)
 
 
 def get_session() -> Generator[Session, None, None]:

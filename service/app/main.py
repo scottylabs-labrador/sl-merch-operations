@@ -79,8 +79,10 @@ def require_role(*roles: str):
         data = _session_data(request)
         role = data.get("role")
         vc_id = data.get("vc")
-        if role == "volunteer" and vc_id is not None and not vcodes.is_active(session, int(vc_id)):
-            raise HTTPException(status_code=401, detail="volunteer code revoked")
+        # A session that signed in with an issued access code (volunteer OR admin)
+        # ends the moment that code is revoked, not just at the next login.
+        if vc_id is not None and not vcodes.is_active(session, int(vc_id)):
+            raise HTTPException(status_code=401, detail="access code revoked")
         if role == "admin" or role in roles:
             return role
         raise HTTPException(status_code=401, detail="passcode required")
@@ -122,6 +124,8 @@ def login(passcode: str = Form(...), next: str = Form("/pickup"), session: Sessi
         return _login_response("volunteer", "/pickup" if next.startswith("/admin") else next)
     vc = vcodes.match_active(session, code)
     if vc:
+        if vc.role == "admin":
+            return _login_response("admin", next, vc_id=vc.id)
         return _login_response("volunteer", "/pickup" if next.startswith("/admin") else next, vc_id=vc.id)
     return RedirectResponse(f"/login?next={next}&error=1", status_code=303)
 
@@ -473,8 +477,8 @@ def volunteers_page(request: Request, role: str = Depends(require_role("admin"))
 
 
 @app.post("/admin/volunteers")
-def volunteers_create(count: int = Form(5), label: str = Form(""), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
-    made = vcodes.create_codes(session, count, label)
+def volunteers_create(count: int = Form(5), label: str = Form(""), code_role: str = Form("volunteer"), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    made = vcodes.create_codes(session, count, label, code_role)
     ids = ",".join(str(c.id) for c in made)
     return RedirectResponse(f"/admin/volunteers?new={ids}", status_code=303)
 

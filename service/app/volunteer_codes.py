@@ -1,10 +1,13 @@
-"""Volunteer access codes: mint, normalize, match, revoke.
+"""Access codes: per-person sign-in credentials an officer mints and revokes.
 
-A volunteer code looks like  VOL-7K3Q9-RT2VX : a fixed prefix plus 10 characters
-from the same unambiguous alphabet the pickup codes use (no 0/O, 1/I/L, or U).
-It is a per-volunteer sign-in credential — handed out before a shift, typed at
-/login, and revocable one at a time — unlike the single shared VOLUNTEER_PASSCODE,
-which can only be cut off by rotating it for everyone at once.
+A code looks like  VOL-7K3Q9-RT2VX  (volunteer) or  ADM-7K3Q9-RT2VX  (admin):
+a 3-letter role prefix plus 10 characters from the same unambiguous alphabet the
+pickup codes use (no 0/O, 1/I/L, or U). It is a per-person credential — handed
+out, typed at /login, and revocable one at a time — unlike the single shared
+VOLUNTEER_PASSCODE / ADMIN_PASSCODE, which can only be cut off by rotating them
+for everyone at once. The role a code grants is the role stored on its row, not
+anything the holder can change; the prefix is only there so a human can tell an
+admin code from a volunteer one at a glance.
 
 Codes are stored in the clear (like the shared passcodes and the pickup codes):
 an officer needs to see them to hand them out or re-share one, and the threat
@@ -25,48 +28,44 @@ from sqlalchemy.orm import Session
 from .codes import ALPHABET  # 30 unambiguous chars, shared with pickup codes
 from .db import VolunteerCode, utcnow
 
-PREFIX = "VOL"
+ROLES = ("volunteer", "admin")
+PREFIXES = {"volunteer": "VOL", "admin": "ADM"}
 BODY_LENGTH = 10
 MAX_BATCH = 200  # one officer action should not be able to mint thousands
 
-_CODE_RE = re.compile(rf"^{PREFIX}([{ALPHABET}]{{{BODY_LENGTH}}})$")
+_CODE_RE = re.compile(rf"^({'|'.join(PREFIXES.values())})([{ALPHABET}]{{{BODY_LENGTH}}})$")
 
 
-def format_volunteer_code(compact: str) -> str:
+def format_code(compact: str) -> str:
     """VOL7K3Q9RT2VX -> VOL-7K3Q9-RT2VX (the canonical stored/displayed form)."""
     compact = compact.upper().replace("-", "").replace(" ", "")
-    body = compact[len(PREFIX):]
-    return f"{PREFIX}-{body[:5]}-{body[5:]}"
+    return f"{compact[:3]}-{compact[3:8]}-{compact[8:]}"
 
 
-def generate_volunteer_code() -> str:
+def generate_code(role: str = "volunteer") -> str:
+    prefix = PREFIXES.get(role, PREFIXES["volunteer"])
     body = "".join(secrets.choice(ALPHABET) for _ in range(BODY_LENGTH))
-    return format_volunteer_code(PREFIX + body)
+    return format_code(prefix + body)
 
 
-def normalize_volunteer_code(raw: Optional[str]) -> Optional[str]:
+def normalize_code(raw: Optional[str]) -> Optional[str]:
     """Turn user input into the canonical form, or None if it cannot be a code.
 
-    Tolerant of case, missing dashes, and surrounding whitespace. The alphabet is
-    already free of ambiguous glyphs, so no character remapping is needed.
+    Tolerant of case, missing dashes, and surrounding whitespace. The full role
+    prefix is required (there are two of them, so a bare body would be ambiguous).
     """
     if not raw:
         return None
     compact = re.sub(r"[^A-Za-z0-9]", "", raw).upper()
-    if not compact.startswith(PREFIX):
-        # Allow people to type just the 10-char body (the body can never begin
-        # with "VOL" because 'O' is not in the alphabet, so this is unambiguous).
-        if len(compact) == BODY_LENGTH:
-            compact = PREFIX + compact
-        else:
-            return None
     if not _CODE_RE.match(compact):
         return None
-    return format_volunteer_code(compact)
+    return format_code(compact)
 
 
-def create_codes(session: Session, count: int, label: str = "", created_by: str = "admin") -> List[VolunteerCode]:
-    """Mint `count` fresh codes (clamped to [1, MAX_BATCH]) and commit them."""
+def create_codes(session: Session, count: int, label: str = "", role: str = "volunteer", created_by: str = "admin") -> List[VolunteerCode]:
+    """Mint `count` fresh codes (clamped to [1, MAX_BATCH]) of `role` and commit them."""
+    if role not in ROLES:
+        role = "volunteer"
     try:
         n = int(count)
     except (TypeError, ValueError):
@@ -76,7 +75,7 @@ def create_codes(session: Session, count: int, label: str = "", created_by: str 
     made: List[VolunteerCode] = []
     for _ in range(n):
         for _attempt in range(6):  # retry on the (vanishingly rare) collision
-            vc = VolunteerCode(code=generate_volunteer_code(), label=clean_label, created_by=created_by)
+            vc = VolunteerCode(code=generate_code(role), label=clean_label, role=role, created_by=created_by)
             session.add(vc)
             try:
                 session.commit()
@@ -90,8 +89,12 @@ def create_codes(session: Session, count: int, label: str = "", created_by: str 
 
 
 def match_active(session: Session, raw: str) -> Optional[VolunteerCode]:
-    """Return the active (non-revoked) code equal to `raw`, recording the use."""
-    code = normalize_volunteer_code(raw)
+    """Return the active (non-revoked) code equal to `raw`, recording the use.
+
+    The returned row carries the role to grant (.role); the caller trusts that,
+    never the prefix the holder typed.
+    """
+    code = normalize_code(raw)
     if not code:
         return None
     vc = session.scalar(

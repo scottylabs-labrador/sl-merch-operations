@@ -17,7 +17,7 @@
 <form method="post" action="/login">
   <h1>ScottyLabs merch pickup</h1>
   <input type="hidden" name="next" value="{{ next }}">
-  <input name="passcode" type="password" placeholder="Passcode or volunteer code" autofocus autocomplete="current-password">
+  <input name="passcode" type="password" placeholder="Passcode or access code" autofocus autocomplete="current-password">
   {% if error %}<p class="err">Wrong passcode.</p>{% endif %}
   <button type="submit">Sign in</button>
 </form>
