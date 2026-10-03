@@ -176,6 +176,34 @@ class Pickup(Base):
     order: Mapped[Order] = relationship(back_populates="pickups")
 
 
+class VolunteerCode(Base):
+    """An individually issued volunteer sign-in code.
+
+    The shared VOLUNTEER_PASSCODE lets anyone who ever learned it keep access
+    forever; the only way to cut one person off is to rotate it for everyone.
+    These are per-volunteer bearer codes an officer mints in bulk on /admin and
+    revokes one at a time (shift ended, code leaked, volunteer left). A code
+    grants the same 'volunteer' role at /login as the shared passcode, but is
+    tracked and can be revoked without disturbing anyone else.
+    """
+
+    __tablename__ = "volunteer_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    label: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)  # who/what it's for
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_used_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    use_count: Mapped[int] = mapped_column(Integer, default=0)
+    revoked_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    revoked_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    @property
+    def active(self) -> bool:
+        return self.revoked_at is None
+
+
 class CustomerUpdate(Base):
     """An officer's email to buyers: drafted by the model as one template, approved on /admin/updates, then sent
     to each order with that buyer's own details filled in (see app/updates.py)."""

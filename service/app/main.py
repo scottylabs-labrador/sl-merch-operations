@@ -25,6 +25,7 @@ from .codes import normalize_code
 from .config import settings
 from .db import CustomerUpdate, InboundEmail, Order, OrderItem, find_order_by_code, get_session, init_db
 from . import updates as updates_mod
+from . import volunteer_codes as vcodes
 from .store_export import ExportFormatError, commit_store_export, parse_store_export, plan_store_export
 from .orders import DuplicateOrder, create_order, find_order_by_reference, record_pickup, resolve_buyer_email, send_code_email, unpicked_by_size
 from .parser import ParsedItem, ParsedOrder
@@ -56,22 +57,30 @@ ROLE_COOKIE = "merch_role"
 
 
 # --------------------------------------------------------------------------- #
-# auth helpers (two shared passcodes, stored as a signed cookie)
+# auth helpers
 # --------------------------------------------------------------------------- #
-def _role_from_request(request: Request) -> Optional[str]:
+# A signed cookie carries the role, and for a volunteer who signed in with an
+# individually issued code, the id of that code. Admin and the shared
+# VOLUNTEER_PASSCODE carry no id. Re-checking the id on every request means
+# revoking a code ends an open session immediately, not just at the next login.
+def _session_data(request: Request) -> dict:
     raw = request.cookies.get(ROLE_COOKIE)
     if not raw:
-        return None
+        return {}
     try:
         data = signer.loads(raw)
     except BadSignature:
-        return None
-    return data.get("role")
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def require_role(*roles: str):
-    def dependency(request: Request) -> str:
-        role = _role_from_request(request)
+    def dependency(request: Request, session: Session = Depends(get_session)) -> str:
+        data = _session_data(request)
+        role = data.get("role")
+        vc_id = data.get("vc")
+        if role == "volunteer" and vc_id is not None and not vcodes.is_active(session, int(vc_id)):
+            raise HTTPException(status_code=401, detail="volunteer code revoked")
         if role == "admin" or role in roles:
             return role
         raise HTTPException(status_code=401, detail="passcode required")
@@ -79,9 +88,12 @@ def require_role(*roles: str):
     return dependency
 
 
-def _login_response(role: str, next_url: str) -> Response:
+def _login_response(role: str, next_url: str, vc_id: Optional[int] = None) -> Response:
+    payload: dict = {"role": role}
+    if vc_id is not None:
+        payload["vc"] = vc_id
     resp = RedirectResponse(next_url, status_code=303)
-    resp.set_cookie(ROLE_COOKIE, signer.dumps({"role": role}), httponly=True, samesite="lax", max_age=60 * 60 * 12, secure=settings.public_base_url.startswith("https"))
+    resp.set_cookie(ROLE_COOKIE, signer.dumps(payload), httponly=True, samesite="lax", max_age=60 * 60 * 12, secure=settings.public_base_url.startswith("https"))
     return resp
 
 
@@ -102,12 +114,15 @@ def login_form(request: Request, next: str = "/pickup", error: str = "") -> HTML
 
 
 @app.post("/login")
-def login(passcode: str = Form(...), next: str = Form("/pickup")) -> Response:
+def login(passcode: str = Form(...), next: str = Form("/pickup"), session: Session = Depends(get_session)) -> Response:
     code = passcode.strip()
     if hmac.compare_digest(code, settings.admin_passcode):
         return _login_response("admin", next)
-    if hmac.compare_digest(code, settings.volunteer_passcode):
+    if settings.volunteer_passcode and hmac.compare_digest(code, settings.volunteer_passcode):
         return _login_response("volunteer", "/pickup" if next.startswith("/admin") else next)
+    vc = vcodes.match_active(session, code)
+    if vc:
+        return _login_response("volunteer", "/pickup" if next.startswith("/admin") else next, vc_id=vc.id)
     return RedirectResponse(f"/login?next={next}&error=1", status_code=303)
 
 
@@ -435,6 +450,45 @@ def agentmail_status(role: str = Depends(require_role("admin"))) -> JSONResponse
         return JSONResponse({"whoami": client.whoami(), "webhooks": client.list_webhooks()})
     except AgentMailError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
+
+
+# --------------------------------------------------------------------------- #
+# Admin: volunteer access codes
+# --------------------------------------------------------------------------- #
+@app.get("/admin/volunteers", response_class=HTMLResponse)
+def volunteers_page(request: Request, role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> HTMLResponse:
+    codes = vcodes.list_codes(session)
+    new_ids = {int(x) for x in request.query_params.get("new", "").split(",") if x.strip().isdigit()}
+    return templates.TemplateResponse(
+        request,
+        "volunteers.html",
+        {
+            "org": settings.org_name,
+            "codes": codes,
+            "new_ids": new_ids,
+            "active_count": sum(1 for c in codes if c.active),
+            "shared_enabled": bool(settings.volunteer_passcode),
+        },
+    )
+
+
+@app.post("/admin/volunteers")
+def volunteers_create(count: int = Form(5), label: str = Form(""), role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    made = vcodes.create_codes(session, count, label)
+    ids = ",".join(str(c.id) for c in made)
+    return RedirectResponse(f"/admin/volunteers?new={ids}", status_code=303)
+
+
+@app.post("/admin/volunteers/{code_id}/revoke")
+def volunteers_revoke(code_id: int, role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    vcodes.revoke(session, code_id)
+    return RedirectResponse("/admin/volunteers", status_code=303)
+
+
+@app.post("/admin/volunteers/{code_id}/restore")
+def volunteers_restore(code_id: int, role: str = Depends(require_role("admin")), session: Session = Depends(get_session)) -> Response:
+    vcodes.restore(session, code_id)
+    return RedirectResponse("/admin/volunteers", status_code=303)
 
 
 # --------------------------------------------------------------------------- #
